@@ -1,0 +1,21 @@
+{
+  "priority": 1,
+  "request": {
+    "method": "POST",
+    "url": "/v1/charges",
+    "bodyPatterns": [
+      { "matchesJsonPath": "$[?(@.customerId == 'customer-timeout')]" }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "transactionId": "{{randomValue type='UUID'}}",
+      "status": "APPROVED",
+      "authorizationCode": "LATE01"
+    },
+    "transformers": ["response-template"],
+    "fixedDelayMilliseconds": 10000
+  }
+}

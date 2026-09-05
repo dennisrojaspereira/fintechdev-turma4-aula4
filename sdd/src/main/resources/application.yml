@@ -1,0 +1,103 @@
+spring:
+  application:
+    name: payments-sdd
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/payments}
+    username: ${DB_USER:payments}
+    password: ${DB_PASSWORD:payments}
+    hikari:
+      maximum-pool-size: 20
+      connection-timeout: 3000
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # acks=all + idempotence: no acknowledged event is lost if a broker dies, and a producer
+      # retry cannot duplicate a record within a session. Delivery across sessions is still
+      # at-least-once (outbox), so consumers deduplicate on eventId.
+      acks: all
+      retries: 5
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        delivery.timeout.ms: 30000
+        request.timeout.ms: 10000
+        max.block.ms: 10000
+    consumer:
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+    listener:
+      # Offset is committed only after the listener (and its DB transaction) returns.
+      ack-mode: record
+
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+
+payments:
+  topics:
+    payment-completed: ${KAFKA_TOPIC_PAYMENT_COMPLETED:payments.payment-completed.v1}
+  consumer:
+    group-id: ${KAFKA_CONSUMER_GROUP:payments-ledger}
+  outbox:
+    batch-size: 100
+    max-attempts: 10
+    poll-interval-ms: 500
+  psp:
+    base-url: ${PSP_BASE_URL:http://localhost:8081}
+    api-key: ${PSP_API_KEY:local-dev-key}
+    # Timeout budget (ADR-001): connect 1s, read 3s. Only connect timeouts and redirects are
+    # retried (max 3 attempts, backoff 200ms then 400ms) so the worst case stays under ~4s.
+    connect-timeout: 1s
+    read-timeout: 3s
+    max-attempts: 3
+    retry-backoff: 200ms
+  pix:
+    base-url: ${PIX_BASE_URL:http://localhost:8083}
+    api-key: ${PIX_API_KEY:local-dev-pix-key}
+    # Timeout budget (ADR-004, D6): connect 1s, read 5s (PIX settlement through the SPI takes
+    # longer than a card authorization). Same retry guardrails as the PSP, independent budget.
+    connect-timeout: 1s
+    read-timeout: 5s
+    max-attempts: 3
+    retry-backoff: 200ms
+
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when_authorized
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %5p [%X{correlationId:-}] %-40.40logger{39} : %m%n"
+  level:
+    com.fintech.payments: INFO

@@ -1,0 +1,78 @@
+spring:
+  application:
+    name: payments-api
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/payments}
+    username: ${DB_USER:payments}
+    password: ${DB_PASSWORD:payments}
+    hikari:
+      maximum-pool-size: 20
+      connection-timeout: 3000
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # acks=all + idempotence: no acknowledged event is lost if a broker dies, and a producer
+      # retry cannot duplicate a record within a session.
+      acks: all
+      retries: 5
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        delivery.timeout.ms: 30000
+        request.timeout.ms: 10000
+
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+
+payments:
+  topics:
+    payment-completed: ${KAFKA_TOPIC_PAYMENT_COMPLETED:payments.payment-completed.v1}
+  outbox:
+    batch-size: 100
+    max-attempts: 10
+    poll-interval-ms: 500
+  psp:
+    base-url: ${PSP_BASE_URL:http://localhost:8081}
+    api-key: ${PSP_API_KEY:local-dev-key}
+    connect-timeout: 2s
+    read-timeout: 5s
+    max-attempts: 3
+    retry-backoff: 200ms
+
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when_authorized
+
+logging:
+  level:
+    com.fintech.payments: INFO

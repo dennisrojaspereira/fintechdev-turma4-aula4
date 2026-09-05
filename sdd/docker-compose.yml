@@ -1,0 +1,96 @@
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: sdd-postgres
+    environment:
+      POSTGRES_DB: payments
+      POSTGRES_USER: payments
+      POSTGRES_PASSWORD: payments
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payments -d payments"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: sdd-kafka
+    ports:
+      # 29093 is the listener advertised to the host, so you can consume from your machine.
+      - "29093:29093"
+    environment:
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,PLAINTEXT_HOST://0.0.0.0:29093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+
+  mock-psp:
+    image: wiremock/wiremock:3.9.2
+    container_name: sdd-mock-psp
+    command: ["--global-response-templating", "--verbose"]
+    ports:
+      - "8082:8080"
+    volumes:
+      - ./docker/mock-psp/mappings:/home/wiremock/mappings:ro
+
+  mock-pix:
+    image: wiremock/wiremock:3.9.2
+    container_name: sdd-mock-pix
+    command: ["--global-response-templating", "--verbose"]
+    ports:
+      - "8083:8080"
+    volumes:
+      - ./docker/mock-pix/mappings:/home/wiremock/mappings:ro
+
+  payments-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sdd-payments-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      mock-psp:
+        condition: service_started
+      mock-pix:
+        condition: service_started
+    ports:
+      - "8090:8080"
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/payments
+      DB_USER: payments
+      DB_PASSWORD: payments
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC_PAYMENT_COMPLETED: payments.payment-completed.v1
+      PSP_BASE_URL: http://mock-psp:8080
+      PSP_API_KEY: local-dev-key
+      PIX_BASE_URL: http://mock-pix:8080
+      PIX_API_KEY: local-dev-pix-key
+
+volumes:
+  postgres-data:
+  kafka-data:

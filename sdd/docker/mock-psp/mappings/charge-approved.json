@@ -1,0 +1,18 @@
+{
+  "priority": 10,
+  "request": {
+    "method": "POST",
+    "url": "/v1/charges"
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "transactionId": "{{randomValue type='UUID'}}",
+      "status": "APPROVED",
+      "authorizationCode": "{{randomValue length=6 type='ALPHANUMERIC' uppercase=true}}"
+    },
+    "transformers": ["response-template"],
+    "fixedDelayMilliseconds": 120
+  }
+}

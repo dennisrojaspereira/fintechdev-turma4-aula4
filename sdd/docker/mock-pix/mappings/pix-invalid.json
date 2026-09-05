@@ -1,0 +1,15 @@
+{
+  "priority": 1,
+  "request": {
+    "method": "POST",
+    "url": "/v1/pix/payments",
+    "bodyPatterns": [
+      { "matchesJsonPath": "$[?(@.customerId == 'customer-rejected')]" }
+    ]
+  },
+  "response": {
+    "status": 400,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": { "error": "merchant_not_enabled", "message": "merchant not enabled for PIX" }
+  }
+}

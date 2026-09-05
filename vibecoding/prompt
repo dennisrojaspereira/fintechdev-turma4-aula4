@@ -1,0 +1,13 @@
+Quero criar uma API de pagamentos.
+
+Stack:
+- Java 21
+- Spring Boot
+- PostgreSQL
+- Kafka
+
+A API deve receber um pagamento, chamar um PSP externo,
+salvar o resultado no PostgreSQL e publicar um evento
+PaymentCompleted no Kafka.
+
+Implemente a solução completa com código, testes e Docker.

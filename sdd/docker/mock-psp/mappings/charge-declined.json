@@ -1,0 +1,21 @@
+{
+  "priority": 1,
+  "request": {
+    "method": "POST",
+    "url": "/v1/charges",
+    "bodyPatterns": [
+      { "matchesJsonPath": "$[?(@.customerId == 'customer-declined')]" }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "transactionId": "{{randomValue type='UUID'}}",
+      "status": "DECLINED",
+      "declineReason": "INSUFFICIENT_FUNDS"
+    },
+    "transformers": ["response-template"],
+    "fixedDelayMilliseconds": 80
+  }
+}

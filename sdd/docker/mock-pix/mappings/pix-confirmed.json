@@ -1,0 +1,17 @@
+{
+  "priority": 10,
+  "request": {
+    "method": "POST",
+    "url": "/v1/pix/payments"
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "endToEndId": "E{{randomValue length=26 type='NUMERIC'}}",
+      "status": "CONFIRMED"
+    },
+    "transformers": ["response-template"],
+    "fixedDelayMilliseconds": 250
+  }
+}

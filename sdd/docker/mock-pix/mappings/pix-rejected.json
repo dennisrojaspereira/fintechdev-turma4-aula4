@@ -1,0 +1,21 @@
+{
+  "priority": 1,
+  "request": {
+    "method": "POST",
+    "url": "/v1/pix/payments",
+    "bodyPatterns": [
+      { "matchesJsonPath": "$[?(@.customerId == 'customer-declined')]" }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "endToEndId": "E{{randomValue length=26 type='NUMERIC'}}",
+      "status": "REJECTED",
+      "rejectionReason": "PAYER_LIMIT_EXCEEDED"
+    },
+    "transformers": ["response-template"],
+    "fixedDelayMilliseconds": 150
+  }
+}
