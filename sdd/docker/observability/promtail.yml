@@ -1,0 +1,41 @@
+# Promtail: discovers every container through the Docker socket and ships its logs to Loki.
+# Labels: container, service (compose service name), level (API lines only).
+# correlationId and traceId of the API are kept as structured metadata, so a payment can be
+# followed with {service="payments-api"} |= "<correlationId>" and jumped to its trace in Tempo.
+server:
+  http_listen_port: 9080
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        # Only this compose project (other containers on the machine are not our business).
+        filters:
+          - name: label
+            values: ["com.docker.compose.project=sdd"]
+    relabel_configs:
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "/(.*)"
+        target_label: container
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
+        target_label: service
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_project"]
+        target_label: project
+    pipeline_stages:
+      - match:
+          selector: '{service="payments-api"}'
+          stages:
+            - regex:
+                expression: '^\S+ \S+\s+(?P<level>[A-Z]+) \[(?P<correlationId>[^\]]*)\] \[(?P<traceId>[^,\]]*),(?P<spanId>[^\]]*)\]'
+            - labels:
+                level:
+            - structured_metadata:
+                correlationId:
+                traceId:

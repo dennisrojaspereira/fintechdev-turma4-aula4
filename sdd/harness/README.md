@@ -66,10 +66,17 @@ idempotência sob concorrência; throughput e drenagem da fila) e um runner loca
 uma página HTML com log ao vivo e cards de resultado:
 
 ```bash
-cd sdd/loadtest && java K6Runner.java      # http://localhost:7000 (stack do compose no ar)
+cd sdd/loadtest && start.cmd               # (ou ./start.sh) abre http://localhost:7000; a página sobe a stack sozinha
 ```
 
 Detalhes e roteiro de aula em [loadtest/README.md](../loadtest/README.md).
+
+## Observabilidade e sintéticos
+
+O compose também sobe Grafana (:3000) + Prometheus + Loki + Tempo e um probe sintético k6 a cada
+minuto (PIX + cartão, POST → GET até APPROVED) com alertas provisionados ("pagamento sintético
+falhando", "fila crescendo"). Os cenários k6 gravam suas métricas no Prometheus (`testid`).
+Dashboards, consultas e como quebrar o sintético em [docs/observability.md](../docs/observability.md).
 
 ## Demo manual (docker compose)
 

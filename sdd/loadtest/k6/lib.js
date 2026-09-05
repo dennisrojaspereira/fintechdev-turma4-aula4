@@ -16,9 +16,11 @@ export const extraProviderCalls = new Counter('extra_provider_calls');
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 
-export function paymentBody(customerId, amount, method) {
+export const MERCHANT = 'k6-merchant';
+
+export function paymentBody(customerId, amount, method, merchantId) {
   return JSON.stringify({
-    merchantId: 'k6-merchant',
+    merchantId: merchantId || MERCHANT,
     customerId: customerId,
     amount: amount,
     currency: 'BRL',
@@ -75,12 +77,16 @@ export function checkAccepted(res) {
 // ------------------------------------------------------------------ fake providers (WireMock)
 
 function countRequests(admin, url) {
-  const res = http.post(`${admin}/requests/count`, JSON.stringify({ method: 'POST', url: url }),
-    { headers: JSON_HEADERS, tags: { name: 'wiremock count' } });
+  // Only this merchant's calls: the synthetic probe runs concurrently with its own merchantId.
+  const body = JSON.stringify({
+    method: 'POST', url: url,
+    bodyPatterns: [{ matchesJsonPath: `$[?(@.merchantId == '${MERCHANT}')]` }],
+  });
+  const res = http.post(`${admin}/requests/count`, body, { headers: JSON_HEADERS, tags: { name: 'wiremock count' } });
   return res.status === 200 ? res.json('count') : -1;
 }
 
-/** Calls received by the fake card PSP and the fake PIX provider since the last reset. */
+/** Calls received by the fake card PSP and the fake PIX provider (this merchant) since the last reset. */
 export function providerCalls() {
   return {
     psp: countRequests(PSP_ADMIN, '/v1/charges'),
@@ -98,7 +104,8 @@ export function resetProviderJournals() {
 /** COUNT of a Micrometer counter, optionally filtered by tag ("status:APPROVED"); 0 when absent. */
 export function metricCount(name, tag) {
   const url = `${BASE}/actuator/metrics/${name}` + (tag ? `?tag=${encodeURIComponent(tag)}` : '');
-  const res = http.get(url, { tags: { name: 'actuator' } });
+  // 404 = the counter has no series for that tag yet (e.g. no DECLINED so far): expected, not an error.
+  const res = http.get(url, { tags: { name: 'actuator' }, responseCallback: http.expectedStatuses(200, 404) });
   if (res.status !== 200) {
     return 0;
   }

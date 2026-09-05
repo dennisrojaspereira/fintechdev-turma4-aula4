@@ -55,12 +55,13 @@ GET /api/v1/payments/{id}  → acompanhar PENDING → PROCESSING → desfecho
 ```bash
 mvn test        # 116 testes unitários, sem Docker
 mvn verify      # + 22 testes de integração (Testcontainers: PostgreSQL lógico, Kafka, Debezium Connect reais, 2 WireMocks)
-docker compose up -d --build   # demo: API :8090, Connect :8084, PSP falso :8082, PIX falso :8083, Postgres :5433, Kafka :29093
+docker compose up -d --build   # demo: API :8090, Connect :8084, mocks :8082/:8083, Grafana :3000, Prometheus :9090
 cd loadtest && java K6Runner.java   # experimentos k6 com página de apresentação em http://localhost:7000
 ```
 
 Exemplos e experimentos de falha em [harness/README.md](harness/README.md); carga (k6) e roteiro
-de aula em [loadtest/README.md](loadtest/README.md).
+de aula em [loadtest/README.md](loadtest/README.md); métricas, logs, traces, sintéticos e alertas
+(Grafana + Prometheus + Loki + Tempo) em [docs/observability.md](docs/observability.md).
 
 ### Onde cada regra vive
 

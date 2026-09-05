@@ -2,7 +2,10 @@ package com.fintech.payments.messaging;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fintech.payments.service.PaymentProcessor;
+import io.micrometer.tracing.Span;
+import io.micrometer.tracing.Tracer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.springframework.beans.factory.ObjectProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -28,10 +31,13 @@ public class PaymentRequestedConsumer {
 
     private final PaymentProcessor processor;
     private final ObjectMapper objectMapper;
+    private final ObjectProvider<Tracer> tracer;
 
-    public PaymentRequestedConsumer(PaymentProcessor processor, ObjectMapper objectMapper) {
+    public PaymentRequestedConsumer(PaymentProcessor processor, ObjectMapper objectMapper,
+                                    ObjectProvider<Tracer> tracer) {
         this.processor = processor;
         this.objectMapper = objectMapper;
+        this.tracer = tracer;
     }
 
     @KafkaListener(topics = "${payments.topics.payment-requested}",
@@ -43,6 +49,7 @@ public class PaymentRequestedConsumer {
             PaymentRequestedEvent event = parse(record);
             MDC.put("paymentId", event.paymentId().toString());
             MDC.put("eventId", event.eventId().toString());
+            tagCurrentSpan(correlationId, event);
             PaymentProcessor.Outcome outcome = processor.process(event);
             log.debug("PaymentRequested eventId={} payment={} -> {}", event.eventId(),
                     event.paymentId(), outcome);
@@ -50,6 +57,17 @@ public class PaymentRequestedConsumer {
             MDC.remove("eventId");
             MDC.remove("paymentId");
             MDC.remove("correlationId");
+        }
+    }
+
+    /** The consumer span (spring.kafka.listener.observation-enabled) gets the business ids. */
+    private void tagCurrentSpan(String correlationId, PaymentRequestedEvent event) {
+        Tracer t = tracer.getIfAvailable();
+        Span span = t == null ? null : t.currentSpan();
+        if (span != null) {
+            span.tag("correlationId", correlationId == null ? "-" : correlationId)
+                .tag("paymentId", event.paymentId().toString())
+                .tag("eventId", event.eventId().toString());
         }
     }
 

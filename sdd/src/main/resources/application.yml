@@ -47,6 +47,11 @@ spring:
     listener:
       # Offset is committed only after the listener (and its DB transaction) returns.
       ack-mode: record
+      # Each consumed record opens a trace (observability harness); Debezium does not propagate
+      # the API trace into the record, so the worker trace starts here and carries correlationId.
+      observation-enabled: true
+    template:
+      observation-enabled: true
 
   jackson:
     default-property-inclusion: non_null
@@ -97,15 +102,31 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        include: health,info,metrics,prometheus
   endpoint:
     health:
       probes:
         enabled: true
       show-details: when_authorized
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+        http.client.requests: true
+  # Traces (OpenTelemetry → Tempo). 100% sampling: this is a harness, not production.
+  tracing:
+    enabled: ${TRACING_ENABLED:true}
+    sampling:
+      probability: 1.0
+  otlp:
+    tracing:
+      endpoint: ${OTLP_TRACES_ENDPOINT:http://localhost:4318/v1/traces}
 
 logging:
   pattern:
-    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %5p [%X{correlationId:-}] %-40.40logger{39} : %m%n"
+    # correlationId (business) and traceId/spanId (tracing) on every line, so Loki ↔ Tempo link.
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %5p [%X{correlationId:-}] [%X{traceId:-},%X{spanId:-}] %-40.40logger{39} : %m%n"
   level:
     com.fintech.payments: INFO

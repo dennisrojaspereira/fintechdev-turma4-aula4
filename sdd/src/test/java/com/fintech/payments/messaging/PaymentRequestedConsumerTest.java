@@ -47,7 +47,9 @@ class PaymentRequestedConsumerTest {
 
     @BeforeEach
     void setUp() {
-        consumer = new PaymentRequestedConsumer(processor, objectMapper);
+        consumer = new PaymentRequestedConsumer(processor, objectMapper,
+                new org.springframework.beans.factory.support.StaticListableBeanFactory()
+                        .getBeanProvider(io.micrometer.tracing.Tracer.class));
     }
 
     private PaymentRequestedEvent event(UUID id) {

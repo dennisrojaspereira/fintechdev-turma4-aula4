@@ -1,0 +1,67 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: payments-synthetics
+    folder: Payments SDD
+    interval: 1m
+    rules:
+      # The synthetic probe (sdd-synthetic) runs every minute: PIX + card, POST → GET until APPROVED.
+      # Any failed probe in the last 5 minutes fires; no probe data at all also fires (NoData → alert).
+      - uid: sdd-synthetic-failing
+        title: Pagamento sintético falhando
+        condition: C
+        for: 2m
+        noDataState: Alerting
+        execErrState: Error
+        labels:
+          severity: critical
+          team: payments
+        annotations:
+          summary: "O probe sintético de pagamento (PIX + cartão) não chegou a APPROVED nos últimos 5 min."
+          runbook: "Ver dashboard 'Payments SPEC-003': fila, lag do consumer, latência dos provedores; logs do connect/worker."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: min_over_time(k6_synthetic_ok_rate{testid="synthetic"}[5m])
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+
+      # The API keeps accepting (202) but the worker stopped resolving: queue grows silently.
+      - uid: sdd-backlog-growing
+        title: Fila de pagamentos crescendo (worker parado?)
+        condition: C
+        for: 3m
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+          team: payments
+        annotations:
+          summary: "Mais de 50 pagamentos aceitos ainda sem desfecho por 3 min."
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: sum(payments_accepted_total) - sum(payments_outcome_total)
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [50] }

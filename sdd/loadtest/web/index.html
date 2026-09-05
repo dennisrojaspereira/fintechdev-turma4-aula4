@@ -17,9 +17,9 @@
   header p { margin: 0; color: var(--muted); max-width: 980px; }
   .flow { margin: 18px 0 0; padding: 12px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
           font: 14px/1.6 var(--mono); color: #c7d0e0; white-space: pre; overflow-x: auto; }
-  .status-bar { display: flex; gap: 16px; align-items: center; margin-top: 14px; color: var(--muted); font-size: 14px; }
+  .status-bar { display: flex; gap: 16px; align-items: center; margin-top: 14px; color: var(--muted); font-size: 14px; flex-wrap: wrap; }
   .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--warn); display: inline-block; margin-right: 6px; }
-  .dot.ok { background: var(--ok); } .dot.fail { background: var(--fail); }
+  .dot.ok { background: var(--ok); } .dot.fail { background: var(--fail); } .dot.off { background: #4a5468; }
   main { padding: 24px 40px 60px; display: grid; gap: 24px; max-width: 1500px; }
   section.card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px 24px; }
   .card-head { display: flex; align-items: flex-start; gap: 18px; flex-wrap: wrap; }
@@ -32,15 +32,21 @@
   .controls label { color: var(--muted); font-size: 14px; }
   .controls input { width: 70px; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: 14px var(--mono); }
   button { background: var(--accent); color: #06111f; border: 0; border-radius: 8px; padding: 10px 18px; font-weight: 700; font-size: 15px; cursor: pointer; }
-  button:disabled { background: #3a4356; color: #8a94a6; cursor: not-allowed; }
+  button.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); }
+  button.danger { background: transparent; color: var(--fail); border: 1px solid var(--fail); }
+  button:disabled { background: #3a4356; color: #8a94a6; cursor: not-allowed; border-color: transparent; }
   .badge { padding: 4px 10px; border-radius: 999px; font: 600 13px var(--mono); border: 1px solid var(--line); color: var(--muted); }
   .badge.running { color: var(--warn); border-color: var(--warn); }
   .badge.pass { color: var(--ok); border-color: var(--ok); }
   .badge.fail { color: var(--fail); border-color: var(--fail); }
+  a.grafana { color: var(--accent); font-size: 14px; text-decoration: none; border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; white-space: nowrap; }
+  a.grafana:hover { border-color: var(--accent); }
+  a.grafana.off { color: #5f6a7e; pointer-events: none; }
   .body { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 18px; margin-top: 18px; }
   @media (max-width: 1100px) { .body { grid-template-columns: 1fr; } }
   .log { background: #0b0e14; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; height: 340px; overflow: auto;
          font: 13px/1.45 var(--mono); color: #b9c3d4; white-space: pre-wrap; word-break: break-word; }
+  .log.short { height: 180px; }
   .log .ok { color: var(--ok); } .log .fail { color: var(--fail); } .log .dim { color: #6f7a8f; }
   .results { display: grid; gap: 12px; align-content: start; }
   .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
@@ -59,6 +65,21 @@
   .empty { color: #5f6a7e; font-size: 14px; }
   footer { padding: 0 40px 40px; color: var(--muted); font-size: 13px; }
   code { font-family: var(--mono); color: #c7d0e0; }
+
+  /* stack section */
+  .stack-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 8px; margin-top: 12px; }
+  .svc { display: flex; align-items: center; gap: 8px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: 13px var(--mono); }
+  .svc .name { flex: 0 0 auto; }
+  .svc .st { flex: 1; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .svc .st { color: var(--muted); font-size: 11px; }
+  .apps { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+  .apps a { display: flex; flex-direction: column; gap: 2px; min-width: 190px; text-decoration: none; color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+  .apps a:hover { border-color: var(--accent); }
+  .apps a.off { opacity: .45; pointer-events: none; }
+  .apps a b { font-size: 15px; }
+  .apps a span { color: var(--muted); font-size: 12px; }
+  .stack-log-wrap { margin-top: 12px; }
+  .stack-log-wrap summary { cursor: pointer; color: var(--muted); font-size: 14px; }
 </style>
 </head>
 <body>
@@ -70,14 +91,48 @@
                                                                                                            └──► PaymentCompleted ──► ledger (idempotente)</div>
   <div class="status-bar">
     <span><span class="dot" id="runner-dot"></span><span id="runner-text">conectando ao runner…</span></span>
-    <span>API <code>localhost:8090</code> · Connect <code>:8084</code> · PSP falso <code>:8082</code> · PIX falso <code>:8083</code></span>
+    <span><span class="dot off" id="stack-dot"></span><span id="stack-text">verificando a stack…</span></span>
   </div>
 </header>
 
-<main id="cards"></main>
+<main id="main">
+  <section class="card" id="stack">
+    <div class="card-head">
+      <div class="num">⚙</div>
+      <div>
+        <h2>Stack (docker compose)</h2>
+        <p class="story">Ao abrir esta página o runner confere o <code>docker compose</code> e sobe tudo que faltar: banco, Kafka, Debezium, mocks, API, Prometheus, Loki, Tempo, Grafana e o monitor sintético.
+           Os experimentos só liberam quando a API, o conector Debezium e o Prometheus respondem.</p>
+      </div>
+      <div class="controls">
+        <span class="badge" id="stack-badge">…</span>
+        <button class="secondary" id="btn-up">Subir tudo</button>
+        <button class="secondary" id="btn-build" title="Reconstrói a imagem da API antes de subir (após mudar o código)">Subir com build</button>
+        <button class="danger" id="btn-down">Parar tudo</button>
+      </div>
+    </div>
+    <div class="stack-grid" id="stack-grid"></div>
+    <div class="apps" id="apps">
+      <a id="app-grafana-payments" href="http://localhost:3000/d/sdd-payments?orgId=1&refresh=5s" target="_blank"><b>Grafana · Payments SPEC-003</b><span>fila, latências, lag, idempotência, sintético, logs</span></a>
+      <a id="app-grafana-k6" href="http://localhost:3000/d/sdd-k6?orgId=1&var-testid=synthetic&refresh=5s" target="_blank"><b>Grafana · k6 e sintéticos</b><span>métricas de cada cenário por testid</span></a>
+      <a id="app-grafana-explore" href="http://localhost:3000/explore" target="_blank"><b>Grafana · Explore</b><span>Loki (logs) e Tempo (traces)</span></a>
+      <a id="app-grafana-alerts" href="http://localhost:3000/alerting/list" target="_blank"><b>Grafana · Alertas</b><span>sintético falhando · fila crescendo</span></a>
+      <a id="app-prometheus" href="http://localhost:9090/targets" target="_blank"><b>Prometheus</b><span>alvos, consultas PromQL, remote write do k6</span></a>
+      <a id="app-connect" href="http://localhost:8084/connectors/payments-outbox/status" target="_blank"><b>Debezium Connect</b><span>status do conector payments-outbox</span></a>
+      <a id="app-api" href="http://localhost:8090/actuator/health" target="_blank"><b>Payments API</b><span>health · /actuator/prometheus · /api/v1/payments</span></a>
+      <a id="app-psp" href="http://localhost:8082/__admin/requests" target="_blank"><b>PSP falso (WireMock)</b><span>journal de /v1/charges</span></a>
+      <a id="app-pix" href="http://localhost:8083/__admin/requests" target="_blank"><b>PIX falso (WireMock)</b><span>journal de /v1/pix/payments</span></a>
+    </div>
+    <details class="stack-log-wrap" id="stack-log-wrap">
+      <summary>Saída do docker compose</summary>
+      <div class="log short" id="stack-log"><span class="dim">Nada executado ainda.</span></div>
+    </details>
+  </section>
+  <div id="cards" style="display: contents"></div>
+</main>
 
 <footer>
-  Runner: <code>cd sdd/loadtest &amp;&amp; java K6Runner.java</code> (usa o <code>k6</code> local ou <code>grafana/k6</code> no Docker).
+  Runner: <code>cd sdd/loadtest &amp;&amp; java K6Runner.java</code> (ou <code>start.cmd</code> / <code>start.sh</code>, que também abre esta página).
   Resultados em <code>sdd/loadtest/results/*.json</code>. Um experimento por vez.
 </footer>
 
@@ -129,7 +184,7 @@ const SCENARIOS = [
     script: '04-throughput.js', title: 'Throughput: a API aceita mais rápido do que o worker processa',
     story: 'Chegada constante de N pagamentos por segundo com chaves únicas. A API precisa sustentar a taxa com p95 baixo e zero erros; no fim, medimos a fila que sobrou e quanto tempo o worker levou para drená-la. Nada se perde: todo pagamento aceito ganha um desfecho e uma única chamada ao provedor.',
     watch: ['dropped_iterations == 0: o k6 manteve a taxa, a API nunca empurrou de volta.',
-            'backlog ao fim da carga > 0 e tempo de drenagem: o desacoplamento aparece como fila durável, não como erro para o cliente.',
+            'backlog ao fim da carga > 0 e tempo de drenagem: o desacoplamento aparece como fila durável, não como erro para o cliente. Abra o Grafana ao lado e veja a fila subir e descer.',
             'Pergunta para a turma: como escalar o worker? (partições = 6, concurrency do listener = 1.)'],
     params: [['RATE', 'req/s', 10], ['DURATION', 'duração', '20s']],
     tiles: [
@@ -145,7 +200,9 @@ const SCENARIOS = [
 ];
 
 const cards = document.getElementById('cards');
-let running = false;
+let running = false;       // a k6 scenario is running
+let stackBusy = false;     // compose up/down in progress
+let stackReady = false;    // API + connector + prometheus answer
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -169,6 +226,20 @@ function metricValue(metrics, name, stat) {
   if (stat === 'rate' && m.value !== undefined && name !== 'http_reqs') return m.value; // Rate metrics
   return m[stat];
 }
+
+function appendLog(log, line, cls) {
+  log.append(el('div', cls, line));
+  log.scrollTop = log.scrollHeight;
+}
+
+function updateButtons() {
+  document.querySelectorAll('button.run').forEach(b => b.disabled = running || stackBusy || !stackReady);
+  document.getElementById('btn-up').disabled = stackBusy || running;
+  document.getElementById('btn-build').disabled = stackBusy || running;
+  document.getElementById('btn-down').disabled = stackBusy || running;
+}
+
+// ------------------------------------------------------------------ scenario cards
 
 SCENARIOS.forEach((sc, i) => {
   const card = el('section', 'card');
@@ -194,8 +265,13 @@ SCENARIOS.forEach((sc, i) => {
     controls.append(l);
   });
   const badge = el('span', 'badge', 'pronto');
-  const button = el('button', null, 'Rodar');
-  controls.append(badge, button);
+  const button = el('button', 'run', 'Rodar');
+  button.disabled = true;
+  const grafana = el('a', 'grafana', 'Grafana ↗');
+  grafana.href = 'http://localhost:3000/d/sdd-k6?orgId=1&var-testid=' + encodeURIComponent(sc.script.replace('.js', '')) + '&from=now-15m&to=now&refresh=5s';
+  grafana.target = '_blank';
+  grafana.title = 'Métricas deste cenário no Grafana (k6 → Prometheus)';
+  controls.append(grafana, badge, button);
   head.append(controls);
   card.append(head);
 
@@ -219,9 +295,9 @@ SCENARIOS.forEach((sc, i) => {
 });
 
 function start(sc, ui) {
-  if (running) return;
+  if (running || stackBusy) return;
   running = true;
-  document.querySelectorAll('button').forEach(b => b.disabled = true);
+  updateButtons();
   ui.badge.textContent = 'rodando…';
   ui.badge.className = 'badge running';
   ui.log.textContent = '';
@@ -232,19 +308,11 @@ function start(sc, ui) {
   Object.entries(ui.inputs).forEach(([k, input]) => params.set(k, input.value.trim()));
   const es = new EventSource('/run?' + params.toString());
 
-  const append = (line, cls) => {
-    const span = el('div', cls, line);
-    ui.log.append(span);
-    ui.log.scrollTop = ui.log.scrollHeight;
-  };
-  es.addEventListener('start', e => {
-    const d = JSON.parse(e.data);
-    append('$ ' + d.command, 'dim');
-  });
+  es.addEventListener('start', e => appendLog(ui.log, '$ ' + JSON.parse(e.data).command, 'dim'));
   es.addEventListener('log', e => {
     const line = JSON.parse(e.data);
     const cls = /✓|succeeded/.test(line) ? 'ok' : /✗|failed|ERRO|error|level=error/.test(line) ? 'fail' : null;
-    append(line, cls);
+    appendLog(ui.log, line, cls);
   });
   es.addEventListener('summary', e => render(sc, ui, JSON.parse(e.data)));
   es.addEventListener('done', e => {
@@ -252,12 +320,12 @@ function start(sc, ui) {
     const pass = d.exitCode === 0;
     ui.badge.textContent = pass ? 'PASSOU (exit 0)' : 'FALHOU (exit ' + d.exitCode + ')';
     ui.badge.className = 'badge ' + (pass ? 'pass' : 'fail');
-    append(pass ? '── thresholds ok, k6 exit 0' : '── k6 exit ' + d.exitCode, pass ? 'ok' : 'fail');
+    appendLog(ui.log, pass ? '── thresholds ok, k6 exit 0' : '── k6 exit ' + d.exitCode, pass ? 'ok' : 'fail');
     finish(es);
   });
   es.onerror = () => {
     if (running) {
-      append('── conexão com o runner perdida', 'fail');
+      appendLog(ui.log, '── conexão com o runner perdida', 'fail');
       ui.badge.textContent = 'erro';
       ui.badge.className = 'badge fail';
       finish(es);
@@ -268,7 +336,7 @@ function start(sc, ui) {
 function finish(es) {
   es.close();
   running = false;
-  document.querySelectorAll('button').forEach(b => b.disabled = false);
+  updateButtons();
 }
 
 function render(sc, ui, summary) {
@@ -316,13 +384,132 @@ function render(sc, ui, summary) {
   }
 }
 
+// ------------------------------------------------------------------ stack (docker compose)
+
+const EXPECTED = ['postgres', 'kafka', 'connect', 'connect-init', 'mock-psp', 'mock-pix', 'payments-api',
+                  'prometheus', 'loki', 'promtail', 'tempo', 'grafana', 'synthetic'];
+const stackGrid = document.getElementById('stack-grid');
+const stackBadge = document.getElementById('stack-badge');
+const stackLog = document.getElementById('stack-log');
+let autoStarted = false;
+
+function svcClass(s) {
+  if (!s) return 'off';
+  if (s.service === 'connect-init') return s.state === 'exited' && s.exitCode === 0 ? 'ok' : s.state === 'running' ? '' : 'fail';
+  if (s.state === 'running') return s.health === 'unhealthy' ? 'fail' : s.health === 'starting' ? '' : 'ok';
+  if (s.state === 'paused') return 'ok';
+  return 'fail';
+}
+
+function renderStack(status) {
+  stackGrid.textContent = '';
+  const byService = {};
+  status.services.forEach(s => byService[s.service] = s);
+  let up = 0;
+  EXPECTED.forEach(name => {
+    const s = byService[name];
+    const row = el('div', 'svc');
+    const cls = svcClass(s);
+    if (cls === 'ok') up++;
+    row.append(el('span', 'dot ' + cls));
+    row.append(el('span', 'name', name));
+    row.append(el('span', 'st', !s ? 'ausente' : s.service === 'connect-init' ? (s.state === 'exited' ? 'exit ' + s.exitCode : s.state)
+                                    : s.state + (s.health && s.health !== '' ? ' · ' + s.health : '')));
+    stackGrid.append(row);
+  });
+
+  const r = status.ready;
+  stackReady = r.api && r.connector && r.prometheus;
+  const readyText = ['api', 'connector', 'prometheus', 'grafana', 'loki', 'tempo'].map(k => (r[k] ? '✓ ' : '✗ ') + k).join('  ');
+  const dot = document.getElementById('stack-dot');
+  const text = document.getElementById('stack-text');
+  if (stackReady && r.grafana) {
+    dot.className = 'dot ok';
+    text.textContent = 'stack pronta · ' + up + '/' + EXPECTED.length + ' serviços · ' + readyText;
+    stackBadge.textContent = 'PRONTA';
+    stackBadge.className = 'badge pass';
+  } else if (up === 0 && !stackBusy) {
+    dot.className = 'dot fail';
+    text.textContent = 'stack parada';
+    stackBadge.textContent = 'PARADA';
+    stackBadge.className = 'badge fail';
+  } else {
+    dot.className = 'dot';
+    text.textContent = (stackBusy ? 'subindo… ' : 'aguardando… ') + up + '/' + EXPECTED.length + ' serviços · ' + readyText;
+    stackBadge.textContent = stackBusy ? 'SUBINDO…' : 'INCOMPLETA';
+    stackBadge.className = 'badge running';
+  }
+
+  // App shortcuts light up as each piece answers.
+  const on = (id, ok) => document.getElementById(id).classList.toggle('off', !ok);
+  on('app-grafana-payments', r.grafana); on('app-grafana-k6', r.grafana); on('app-grafana-explore', r.grafana); on('app-grafana-alerts', r.grafana);
+  on('app-prometheus', r.prometheus); on('app-connect', !!byService['connect'] && byService['connect'].state === 'running');
+  on('app-api', r.api);
+  on('app-psp', !!byService['mock-psp'] && byService['mock-psp'].state === 'running');
+  on('app-pix', !!byService['mock-pix'] && byService['mock-pix'].state === 'running');
+  document.querySelectorAll('a.grafana').forEach(a => a.classList.toggle('off', !r.grafana));
+  updateButtons();
+}
+
+async function refreshStack() {
+  try {
+    const status = await (await fetch('/stack/status')).json();
+    stackBusy = status.busy || stackBusy;
+    renderStack(status);
+    // First load: bring everything up automatically when something is missing.
+    if (!autoStarted && !stackBusy) {
+      autoStarted = true;
+      const running = status.services.filter(s => s.state === 'running' || (s.service === 'connect-init' && s.exitCode === 0)).length;
+      if (running < EXPECTED.length) {
+        stackCommand('up', false);
+      }
+    }
+  } catch (e) {
+    document.getElementById('stack-text').textContent = 'runner não respondeu ao status da stack';
+  }
+}
+
+function stackCommand(verb, build) {
+  if (stackBusy || running) return;
+  stackBusy = true;
+  updateButtons();
+  stackBadge.textContent = verb === 'up' ? 'SUBINDO…' : 'PARANDO…';
+  stackBadge.className = 'badge running';
+  document.getElementById('stack-log-wrap').open = true;
+  stackLog.textContent = '';
+  const es = new EventSource('/stack/' + verb + (build ? '?build=1' : ''));
+  es.addEventListener('start', e => appendLog(stackLog, '$ ' + JSON.parse(e.data).command, 'dim'));
+  es.addEventListener('log', e => {
+    const line = JSON.parse(e.data);
+    appendLog(stackLog, line, /Healthy|Started|Running|Created/.test(line) ? 'ok' : /Error|error|failed/.test(line) ? 'fail' : null);
+  });
+  es.addEventListener('done', e => {
+    const d = JSON.parse(e.data);
+    appendLog(stackLog, '── docker compose exit ' + d.exitCode, d.exitCode === 0 ? 'ok' : 'fail');
+    es.close();
+    stackBusy = false;
+    refreshStack();
+  });
+  es.onerror = () => { if (stackBusy) { appendLog(stackLog, '── conexão perdida', 'fail'); es.close(); stackBusy = false; refreshStack(); } };
+}
+
+document.getElementById('btn-up').addEventListener('click', () => stackCommand('up', false));
+document.getElementById('btn-build').addEventListener('click', () => stackCommand('up', true));
+document.getElementById('btn-down').addEventListener('click', () => {
+  if (confirm('Parar todos os containers da stack (docker compose down)?')) stackCommand('down', false);
+});
+
 fetch('/scenarios').then(r => r.json()).then(d => {
   document.getElementById('runner-dot').className = 'dot ok';
-  document.getElementById('runner-text').textContent = 'runner conectado · modo ' + d.mode + ' · ' + d.scripts.length + ' cenários';
+  document.getElementById('runner-text').textContent = 'runner conectado · modo ' + d.mode + ' · ' + d.scripts.length + ' cenários'
+    + (d.prometheus ? ' · métricas → Prometheus' : ' · métricas → Prometheus assim que subir');
 }).catch(() => {
   document.getElementById('runner-dot').className = 'dot fail';
   document.getElementById('runner-text').textContent = 'runner fora do ar: cd sdd/loadtest && java K6Runner.java';
 });
+
+refreshStack();
+setInterval(refreshStack, 5000);
 </script>
 </body>
 </html>

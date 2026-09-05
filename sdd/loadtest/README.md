@@ -6,23 +6,51 @@ falha, e a página mostra o card em vermelho.
 
 ```
 loadtest/
-├── K6Runner.java     servidor local (só JDK 21): serve a página e executa um cenário por vez,
-│                     transmitindo a saída do k6 por Server-Sent Events + o resumo JSON
+├── K6Runner.java     servidor local (só JDK 21): serve a página, sobe/para a stack do compose e
+│                     executa um cenário por vez, transmitindo a saída por Server-Sent Events
+├── start.cmd / start.sh   abre a página e sobe o runner com um clique
 ├── web/index.html    a apresentação: um card por experimento, log ao vivo, métricas e thresholds
 ├── k6/lib.js         helpers (POST/GET, espera do desfecho, journal dos provedores falsos, Actuator)
 ├── k6/01-smoke.js                    caminho feliz, 1 VU
 ├── k6/02-api-nao-espera-provedor.js  provedor de 10 s vs normal: mesma latência de POST; UNKNOWN ≠ FAILED
 ├── k6/03-idempotencia.js             20 VUs em 25 chaves: um 202 por chave, 25 chamadas ao provedor
 ├── k6/04-throughput.js               chegada constante: API sustenta a taxa, worker drena a fila
+├── synthetic/payment-probe.js        monitor sintético: 1 PIX + 1 cartão por minuto (compose: sdd-synthetic)
 └── results/                          resumos JSON de cada execução (ignorado pelo git)
 ```
+
+## Observabilidade
+
+Com a stack do compose no ar, o runner detecta o Prometheus (`:9090`) e cada rodada é gravada
+por remote write com a tag `testid=<cenário>`; o botão "Grafana ↗" de cada card abre o dashboard
+*k6 — carga e sintéticos* filtrado pelo cenário, e o cabeçalho linka o dashboard *Payments
+SPEC-003* (fila, latências, lag, idempotência, logs, traces). Detalhes em
+[docs/observability.md](../docs/observability.md).
+
+Durante uma rodada o runner pausa o container `sdd-synthetic` (o probe sintético), porque os
+cenários 03 e 04 leem os contadores de aceitos/desfechos da API. Rodando o k6 direto no terminal,
+pause você mesmo: `docker compose pause synthetic` … `docker compose unpause synthetic`.
 
 ## Rodar
 
 ```bash
-cd sdd && docker compose up -d --build       # a stack completa (API :8090, Connect :8084, mocks :8082/:8083)
-cd loadtest && java K6Runner.java            # http://localhost:7000
+cd sdd/loadtest
+start.cmd            # Windows: abre http://localhost:7000 e sobe o runner
+./start.sh           # Linux/macOS
+# ou: java K6Runner.java
 ```
+
+A página cuida do resto: ao abrir, consulta o `docker compose` e **sobe automaticamente** o que
+faltar (banco, Kafka, Debezium, mocks, API, Prometheus, Loki, Tempo, Grafana, sintético), mostra
+o estado de cada serviço, a prontidão (API, conector, Prometheus, Grafana, Loki, Tempo) e os
+atalhos para Grafana (dashboards, Explore, alertas), Prometheus, Debezium Connect, API e os
+journals dos provedores falsos. Botões: *Subir tudo*, *Subir com build* (após mudar o código da
+API) e *Parar tudo*. Os experimentos só liberam quando a stack está pronta. Só pré-requisitos:
+JDK 21 e Docker Desktop no ar (na primeira vez a imagem da API precisa ser construída: use
+*Subir com build* ou `docker compose up -d --build` uma vez).
+
+Endpoints do runner usados pela página: `/stack/status`, `/stack/up[?build=1]`, `/stack/down`
+(SSE), `/run?script=…`, `/latest?script=…`, `/scenarios`.
 
 O runner usa o `k6` local se estiver no PATH; senão, `docker run grafana/k6` na rede
 `sdd_default` (variáveis `K6_MODE=docker`, `K6_IMAGE`, `K6_NETWORK` forçam o comportamento).
@@ -65,7 +93,7 @@ Métricas customizadas: `time_to_outcome` (POST → desfecho visível no GET), `
 ## Limites
 
 - O runner é uma ferramenta de sala de aula: só escuta em `127.0.0.1`, um cenário por vez, sem
-  autenticação.
+  autenticação, e executa `docker compose` no diretório `sdd/` de quem o iniciou.
 - Os provedores falsos são WireMock com delays fixos; latências absolutas dependem da máquina.
 - O experimento 04 não pausa Kafka/Debezium (isso está no harness `PaymentFlowIT` e na demo
   manual de `harness/README.md`).

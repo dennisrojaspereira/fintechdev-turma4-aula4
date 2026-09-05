@@ -1,0 +1,17 @@
+# Prometheus for the harness: scrapes the API (Micrometer) and receives k6 results by remote write
+# (k6 --out experimental-prometheus-rw → /api/v1/write; enabled by --web.enable-remote-write-receiver).
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: payments-api
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["payments-api:8080"]
+        labels:
+          service: payments-api
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

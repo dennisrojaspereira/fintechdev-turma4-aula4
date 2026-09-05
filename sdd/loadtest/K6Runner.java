@@ -6,10 +6,15 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.net.URI;
 import java.net.URLDecoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -18,12 +23,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 /**
- * Tiny local server for the classroom load-test page: serves {@code web/index.html} and runs one
- * k6 scenario at a time, streaming its output as Server-Sent Events, then the summary JSON.
+ * Tiny local server for the classroom page: serves {@code web/index.html}, starts/stops the
+ * docker compose stack, reports its readiness, and runs one k6 scenario at a time, streaming
+ * output as Server-Sent Events followed by the summary JSON.
  *
  * <pre>
  *   cd sdd/loadtest && java K6Runner.java            # http://localhost:7000
@@ -43,9 +50,16 @@ public class K6Runner {
     private static final Path K6_DIR = ROOT.resolve("k6");
     private static final Path WEB_DIR = ROOT.resolve("web");
     private static final Path RESULTS_DIR = ROOT.resolve("results");
+    /** The compose project lives one level up (sdd/). */
+    private static final Path COMPOSE_DIR = ROOT.getParent();
 
     private static final AtomicBoolean RUNNING = new AtomicBoolean(false);
+    private static final AtomicBoolean STACK_BUSY = new AtomicBoolean(false);
+    private static final HttpClient HTTP = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
+
     private static String mode; // "local" or "docker"
+    /** Prometheus remote-write URL as seen from k6 (host or compose network), or null if absent. */
+    private static volatile String prometheusWriteUrl;
 
     public static void main(String[] args) throws Exception {
         int port = args.length > 0 ? Integer.parseInt(args[0]) : 7000;
@@ -55,18 +69,25 @@ public class K6Runner {
         }
         Files.createDirectories(RESULTS_DIR);
         mode = detectMode();
+        prometheusWriteUrl = detectPrometheus();
 
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
         server.createContext("/", K6Runner::serveIndex);
         server.createContext("/scenarios", K6Runner::listScenarios);
         server.createContext("/run", K6Runner::run);
         server.createContext("/latest", K6Runner::latest);
+        server.createContext("/stack/status", K6Runner::stackStatus);
+        server.createContext("/stack/up", ex -> stackCommand(ex, "up"));
+        server.createContext("/stack/down", ex -> stackCommand(ex, "down"));
         server.setExecutor(Executors.newCachedThreadPool());
         server.start();
-        System.out.println("k6 runner (" + mode + ") → http://localhost:" + port + "   scripts: " + K6_DIR);
+        System.out.println("k6 runner (" + mode + ") -> http://localhost:" + port + "   scripts: " + K6_DIR
+                + "   compose: " + COMPOSE_DIR
+                + (prometheusWriteUrl == null ? "   (no Prometheus yet: detected again on every run)"
+                                              : "   metrics -> " + prometheusWriteUrl));
     }
 
-    // ---------------------------------------------------------------- handlers
+    // ---------------------------------------------------------------- page & scenarios
 
     private static void serveIndex(HttpExchange ex) throws IOException {
         if (!"/".equals(ex.getRequestURI().getPath())) {
@@ -84,7 +105,10 @@ public class K6Runner {
                     .sorted()
                     .forEach(names::add);
         }
-        StringBuilder json = new StringBuilder("{\"mode\":\"").append(mode).append("\",\"scripts\":[");
+        prometheusWriteUrl = detectPrometheus();
+        StringBuilder json = new StringBuilder("{\"mode\":\"").append(mode)
+                .append("\",\"prometheus\":").append(prometheusWriteUrl != null)
+                .append(",\"scripts\":[");
         for (int i = 0; i < names.size(); i++) {
             json.append(i > 0 ? "," : "").append('"').append(names.get(i)).append('"');
         }
@@ -127,7 +151,7 @@ public class K6Runner {
             return;
         }
         try {
-            stream(ex, script, query);
+            runScenario(ex, script, query);
         } finally {
             RUNNING.set(false);
         }
@@ -135,27 +159,28 @@ public class K6Runner {
 
     // ---------------------------------------------------------------- k6 execution
 
-    private static void stream(HttpExchange ex, String script, Map<String, String> query) throws IOException {
-        ex.getResponseHeaders().add("Content-Type", "text/event-stream; charset=utf-8");
-        ex.getResponseHeaders().add("Cache-Control", "no-cache");
-        ex.getResponseHeaders().add("X-Accel-Buffering", "no");
-        ex.sendResponseHeaders(200, 0);
-        OutputStream out = ex.getResponseBody();
+    private static void runScenario(HttpExchange ex, String script, Map<String, String> query) throws IOException {
+        OutputStream out = openEventStream(ex);
+        prometheusWriteUrl = detectPrometheus();
 
         String runId = LocalDateTime.now().format(TS);
         String summaryName = script.replace(".js", "") + "-" + runId + ".json";
         Path summaryFile = RESULTS_DIR.resolve(summaryName);
 
-        List<String> cmd = command(script, summaryName, runId, query);
-        ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true);
+        List<String> cmd = k6Command(script, summaryName, runId, query);
+        Map<String, String> env = new HashMap<>();
         if ("local".equals(mode)) {
-            pb.environment().put("BASE_URL", "http://localhost:8090");
-            pb.environment().put("PSP_ADMIN", "http://localhost:8082/__admin");
-            pb.environment().put("PIX_ADMIN", "http://localhost:8083/__admin");
-            pb.environment().put("RUN_ID", runId);
+            env.put("BASE_URL", "http://localhost:8090");
+            env.put("PSP_ADMIN", "http://localhost:8082/__admin");
+            env.put("PIX_ADMIN", "http://localhost:8083/__admin");
+            env.put("RUN_ID", runId);
+            if (prometheusWriteUrl != null) {
+                env.put("K6_PROMETHEUS_RW_SERVER_URL", prometheusWriteUrl);
+                env.put("K6_PROMETHEUS_RW_TREND_STATS", "p(95),p(99),avg,max");
+            }
             for (String key : PASSTHROUGH_ENV) {
                 if (query.containsKey(key)) {
-                    pb.environment().put(key, query.get(key));
+                    env.put(key, query.get(key));
                 }
             }
         }
@@ -163,44 +188,18 @@ public class K6Runner {
         event(out, "start", "{\"mode\":\"" + mode + "\",\"runId\":\"" + runId + "\",\"command\":"
                 + jsonString(String.join(" ", cmd)) + "}");
 
-        Process process;
+        // The synthetic probe (compose service) would add its own payments to the app counters
+        // the scenarios read (accepted/outcomes): freeze it for the duration of the run.
+        docker("pause", "sdd-synthetic");
+        Integer exit;
         try {
-            process = pb.start();
-        } catch (IOException e) {
-            event(out, "log", jsonString("could not start k6: " + e.getMessage()));
-            event(out, "done", "{\"exitCode\":-1}");
-            out.close();
-            return;
+            exit = streamProcess(out, cmd, env, ROOT);
+        } finally {
+            docker("unpause", "sdd-synthetic");
         }
-
-        int exit;
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-            StringBuilder line = new StringBuilder();
-            int c;
-            while ((c = reader.read()) != -1) {
-                if (c == '\n' || c == '\r') {
-                    if (!line.isEmpty()) {
-                        event(out, "log", jsonString(line.toString()));
-                        line.setLength(0);
-                    }
-                } else {
-                    line.append((char) c);
-                }
-            }
-            if (!line.isEmpty()) {
-                event(out, "log", jsonString(line.toString()));
-            }
-            exit = process.waitFor();
-        } catch (IOException | InterruptedException e) {
-            // Browser went away (or we were interrupted): never leave a k6 running.
-            process.destroyForcibly();
-            if (e instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
-            }
-            return;
+        if (exit == null) {
+            return; // client went away
         }
-
         if (Files.isRegularFile(summaryFile)) {
             event(out, "summary", Files.readString(summaryFile, StandardCharsets.UTF_8));
         }
@@ -208,12 +207,19 @@ public class K6Runner {
         out.close();
     }
 
-    private static List<String> command(String script, String summaryName, String runId, Map<String, String> query) {
+    private static List<String> k6Command(String script, String summaryName, String runId, Map<String, String> query) {
         List<String> cmd = new ArrayList<>();
+        String testId = script.replace(".js", "");
         if ("local".equals(mode)) {
             cmd.add("k6");
             cmd.add("run");
             cmd.add("--no-color");
+            cmd.add("--tag");
+            cmd.add("testid=" + testId);
+            if (prometheusWriteUrl != null) {
+                cmd.add("--out");
+                cmd.add("experimental-prometheus-rw");
+            }
             cmd.add("--summary-export");
             cmd.add(RESULTS_DIR.resolve(summaryName).toString());
             cmd.add(K6_DIR.resolve(script).toString());
@@ -232,9 +238,204 @@ public class K6Runner {
                 cmd.addAll(List.of("-e", key + "=" + query.get(key)));
             }
         }
+        if (prometheusWriteUrl != null) {
+            cmd.addAll(List.of("-e", "K6_PROMETHEUS_RW_SERVER_URL=" + prometheusWriteUrl,
+                    "-e", "K6_PROMETHEUS_RW_TREND_STATS=p(95),p(99),avg,max"));
+        }
         cmd.addAll(List.of(System.getenv().getOrDefault("K6_IMAGE", "grafana/k6:latest"),
-                "run", "--no-color", "--summary-export", "/results/" + summaryName, "/scripts/" + script));
+                "run", "--no-color", "--tag", "testid=" + testId));
+        if (prometheusWriteUrl != null) {
+            cmd.addAll(List.of("--out", "experimental-prometheus-rw"));
+        }
+        cmd.addAll(List.of("--summary-export", "/results/" + summaryName, "/scripts/" + script));
         return cmd;
+    }
+
+    // ---------------------------------------------------------------- docker compose stack
+
+    /**
+     * {@code docker compose ps} plus HTTP readiness of the pieces the page cares about:
+     * <pre>{"services":[{"service":..,"name":..,"state":..,"health":..}], "ready":{...}}</pre>
+     */
+    private static void stackStatus(HttpExchange ex) throws IOException {
+        List<String> lines = captureLines(List.of("docker", "compose", "ps", "-a", "--format", "json"), COMPOSE_DIR);
+        StringBuilder services = new StringBuilder("[");
+        boolean first = true;
+        for (String line : lines) {
+            if (!line.startsWith("{") && !line.startsWith("[")) {
+                continue;
+            }
+            // Some compose versions print one JSON object per line, others a JSON array.
+            for (String obj : splitJsonObjects(line)) {
+                String service = jsonField(obj, "Service");
+                if (service == null) {
+                    continue;
+                }
+                String exitCode = jsonField(obj, "ExitCode");
+                services.append(first ? "" : ",").append("{\"service\":").append(jsonString(service))
+                        .append(",\"name\":").append(jsonString(String.valueOf(jsonField(obj, "Name"))))
+                        .append(",\"state\":").append(jsonString(String.valueOf(jsonField(obj, "State"))))
+                        .append(",\"health\":").append(jsonString(String.valueOf(jsonField(obj, "Health"))))
+                        .append(",\"exitCode\":").append(exitCode == null ? "null" : exitCode)
+                        .append('}');
+                first = false;
+            }
+        }
+        services.append(']');
+
+        boolean api = httpOk("http://localhost:8090/actuator/health/readiness", "UP");
+        boolean grafana = httpOk("http://localhost:3000/api/health", "ok");
+        boolean prometheus = httpOk("http://localhost:9090/-/ready", null);
+        boolean connector = httpOk("http://localhost:8084/connectors/payments-outbox/status", "\"tasks\":[{\"id\":0,\"state\":\"RUNNING\"");
+        boolean loki = httpOk("http://localhost:3100/ready", "ready");
+        boolean tempo = httpOk("http://localhost:3200/ready", "ready");
+        String body = "{\"busy\":" + STACK_BUSY.get() + ",\"composeDir\":" + jsonString(COMPOSE_DIR.toString())
+                + ",\"services\":" + services
+                + ",\"ready\":{\"api\":" + api + ",\"grafana\":" + grafana + ",\"prometheus\":" + prometheus
+                + ",\"connector\":" + connector + ",\"loki\":" + loki + ",\"tempo\":" + tempo + "}}";
+        respond(ex, 200, "application/json", body);
+    }
+
+    /** SSE of {@code docker compose up -d [--build]} or {@code docker compose down}. */
+    private static void stackCommand(HttpExchange ex, String verb) throws IOException {
+        if (!STACK_BUSY.compareAndSet(false, true)) {
+            respond(ex, 409, "text/plain", "the stack is already being changed");
+            return;
+        }
+        try {
+            List<String> cmd = new ArrayList<>(List.of("docker", "compose"));
+            if ("up".equals(verb)) {
+                cmd.addAll(List.of("up", "-d"));
+                if ("1".equals(query(ex).getOrDefault("build", "0"))) {
+                    cmd.add("--build");
+                }
+            } else {
+                cmd.add("down");
+            }
+            OutputStream out = openEventStream(ex);
+            event(out, "start", "{\"command\":" + jsonString(String.join(" ", cmd)) + "}");
+            Integer exit = streamProcess(out, cmd, Map.of(), COMPOSE_DIR);
+            if (exit == null) {
+                return;
+            }
+            event(out, "done", "{\"exitCode\":" + exit + "}");
+            out.close();
+        } finally {
+            STACK_BUSY.set(false);
+        }
+    }
+
+    // ---------------------------------------------------------------- process streaming
+
+    private static OutputStream openEventStream(HttpExchange ex) throws IOException {
+        ex.getResponseHeaders().add("Content-Type", "text/event-stream; charset=utf-8");
+        ex.getResponseHeaders().add("Cache-Control", "no-cache");
+        ex.getResponseHeaders().add("X-Accel-Buffering", "no");
+        ex.sendResponseHeaders(200, 0);
+        return ex.getResponseBody();
+    }
+
+    /**
+     * Runs {@code cmd}, forwarding every output line as a {@code log} event. Returns the exit
+     * code, or null if the client disconnected (the process is then killed).
+     */
+    private static Integer streamProcess(OutputStream out, List<String> cmd, Map<String, String> env, Path dir) throws IOException {
+        ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true).directory(dir.toFile());
+        pb.environment().putAll(env);
+        Process process;
+        try {
+            process = pb.start();
+        } catch (IOException e) {
+            event(out, "log", jsonString("could not start " + cmd.get(0) + ": " + e.getMessage()));
+            event(out, "done", "{\"exitCode\":-1}");
+            out.close();
+            return null;
+        }
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+            StringBuilder line = new StringBuilder();
+            int c;
+            while ((c = reader.read()) != -1) {
+                if (c == '\n' || c == '\r') {
+                    if (!line.isEmpty()) {
+                        event(out, "log", jsonString(line.toString()));
+                        line.setLength(0);
+                    }
+                } else {
+                    line.append((char) c);
+                }
+            }
+            if (!line.isEmpty()) {
+                event(out, "log", jsonString(line.toString()));
+            }
+            return process.waitFor();
+        } catch (IOException | InterruptedException e) {
+            // Browser went away (or we were interrupted): never leave a child process running.
+            process.destroyForcibly();
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            return null;
+        }
+    }
+
+    private static List<String> captureLines(List<String> cmd, Path dir) {
+        List<String> lines = new ArrayList<>();
+        try {
+            Process p = new ProcessBuilder(cmd).redirectErrorStream(true).directory(dir.toFile()).start();
+            try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = r.readLine()) != null) {
+                    lines.add(line);
+                }
+            }
+            p.waitFor();
+        } catch (IOException e) {
+            lines.add("error: " + e.getMessage());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return lines;
+    }
+
+    // ---------------------------------------------------------------- detection helpers
+
+    /** Prometheus of the compose stack (host port 9090); k6 remote-writes to it when it answers. */
+    private static String detectPrometheus() {
+        String forced = System.getenv("K6_PROMETHEUS_RW_SERVER_URL");
+        if (forced != null && !forced.isBlank()) {
+            return forced;
+        }
+        if (!httpOk("http://localhost:9090/-/ready", null)) {
+            return null;
+        }
+        return "local".equals(mode) ? "http://localhost:9090/api/v1/write" : "http://prometheus:9090/api/v1/write";
+    }
+
+    private static boolean httpOk(String url, String mustContain) {
+        try {
+            HttpResponse<String> res = HTTP.send(HttpRequest.newBuilder().uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(2)).GET().build(), HttpResponse.BodyHandlers.ofString());
+            return res.statusCode() == 200 && (mustContain == null || res.body().contains(mustContain));
+        } catch (IOException | IllegalArgumentException e) {
+            return false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    /** Best effort {@code docker <verb> <container>}; silently ignored when Docker or the container is absent. */
+    private static void docker(String verb, String container) {
+        try {
+            Process p = new ProcessBuilder("docker", verb, container).redirectErrorStream(true).start();
+            p.getInputStream().readAllBytes();
+            p.waitFor();
+        } catch (IOException e) {
+            // no docker on this machine: nothing to pause
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private static String detectMode() {
@@ -254,7 +455,42 @@ public class K6Runner {
         }
     }
 
-    // ---------------------------------------------------------------- helpers
+    // ---------------------------------------------------------------- tiny JSON helpers
+
+    /** Splits a line that is either one JSON object or a JSON array of flat objects. */
+    private static List<String> splitJsonObjects(String line) {
+        List<String> objects = new ArrayList<>();
+        int depth = 0;
+        int start = -1;
+        boolean inString = false;
+        for (int i = 0; i < line.length(); i++) {
+            char c = line.charAt(i);
+            if (c == '"' && (i == 0 || line.charAt(i - 1) != '\\')) {
+                inString = !inString;
+            }
+            if (inString) {
+                continue;
+            }
+            if (c == '{') {
+                if (depth++ == 0) {
+                    start = i;
+                }
+            } else if (c == '}' && --depth == 0 && start >= 0) {
+                objects.add(line.substring(start, i + 1));
+                start = -1;
+            }
+        }
+        return objects;
+    }
+
+    /** Value of a top-level string/number field of a flat JSON object, or null. */
+    private static String jsonField(String obj, String field) {
+        Matcher m = Pattern.compile("\"" + field + "\"\\s*:\\s*(\"((?:[^\"\\\\]|\\\\.)*)\"|(-?\\d+))").matcher(obj);
+        if (!m.find()) {
+            return null;
+        }
+        return m.group(2) != null ? m.group(2).replace("\\\"", "\"").replace("\\\\", "\\") : m.group(3);
+    }
 
     private static void event(OutputStream out, String name, String jsonData) throws IOException {
         out.write(("event: " + name + "\ndata: " + jsonData.replace("\n", "\ndata: ") + "\n\n")

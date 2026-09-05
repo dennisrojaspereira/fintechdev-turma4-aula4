@@ -117,6 +117,8 @@ public abstract class AbstractIntegrationTest {
         // the "dead worker" experiments finish in seconds (production: 30s, ADR-005 D10).
         registry.add("payments.outbox.publisher", () -> "cdc");
         registry.add("payments.worker.processing-timeout", () -> "3s");
+        // No Tempo in the harness: keep traces off instead of logging export failures.
+        registry.add("management.tracing.enabled", () -> false);
     }
 
     @BeforeEach
