@@ -47,9 +47,10 @@ class OutboxPublisherTest {
     @BeforeEach
     void setUp() {
         var properties = new PaymentsProperties(
-                new PaymentsProperties.Outbox(100, 3, 500),
-                new PaymentsProperties.Topics("payments.payment-completed.v1"),
-                new PaymentsProperties.Consumer("ledger"));
+                new PaymentsProperties.Outbox("poller", 100, 3, 500),
+                new PaymentsProperties.Topics("payments.payment-completed.v1", "payments.payment-requested.v1"),
+                new PaymentsProperties.Consumer("ledger"),
+                new PaymentsProperties.Worker("worker", java.time.Duration.ofSeconds(30)));
         publisher = new OutboxPublisher(outbox, kafkaTemplate, properties, CLOCK);
         message = OutboxMessage.of(UUID.randomUUID(), "Payment", "pay-1", "PaymentCompleted",
                 "payments.payment-completed.v1", "pay-1", "{}", "corr-1", CLOCK.instant());

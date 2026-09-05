@@ -34,7 +34,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** The public HTTP contract (ADR-002). */
+/** The public HTTP contract (ADR-002, made asynchronous by ADR-005 D7). */
 @WebMvcTest(controllers = PaymentController.class)
 class PaymentControllerTest {
 
@@ -73,7 +73,26 @@ class PaymentControllerTest {
     }
 
     @Test
-    @DisplayName("201 Created with Location when the PSP approved")
+    @DisplayName("SPEC-003 — 202 Accepted with Location and status PENDING for a new payment (no provider called)")
+    void acceptedWhenPending() throws Exception {
+        Payment payment = pending();
+        when(paymentService.pay(any())).thenReturn(new PaymentResult(payment, false));
+
+        mockMvc.perform(post("/api/v1/payments")
+                        .header("Idempotency-Key", "idem-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validRequest())))
+                .andExpect(status().isAccepted())
+                .andExpect(header().string("Location", "http://localhost/api/v1/payments/" + payment.getId()))
+                .andExpect(jsonPath("$.id").value(payment.getId().toString()))
+                .andExpect(jsonPath("$.status").value("PENDING"))
+                .andExpect(jsonPath("$.provider").value("CARD_PSP"))
+                .andExpect(jsonPath("$.pspTransactionId").doesNotExist())
+                .andExpect(jsonPath("$.correlationId").value("corr-1"));
+    }
+
+    @Test
+    @DisplayName("201 Created with Location only when a new payment is already terminal (kept for a total mapping)")
     void createdWhenApproved() throws Exception {
         Payment payment = pending();
         payment.approve("psp-tx-1", "AUTH", NOW);
@@ -126,7 +145,7 @@ class PaymentControllerTest {
     }
 
     @Test
-    @DisplayName("200 OK without Location when the idempotency key is replayed")
+    @DisplayName("200 OK without Location when the idempotency key is replayed, whatever the state")
     void okWhenReplayed() throws Exception {
         Payment payment = pending();
         payment.approve("psp-tx-1", "AUTH", NOW);
@@ -139,6 +158,17 @@ class PaymentControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(header().doesNotExist("Location"))
                 .andExpect(jsonPath("$.id").value(payment.getId().toString()));
+
+        Payment stillPending = pending();
+        when(paymentService.pay(any())).thenReturn(new PaymentResult(stillPending, true));
+
+        mockMvc.perform(post("/api/v1/payments")
+                        .header("Idempotency-Key", "idem-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validRequest())))
+                .andExpect(status().isOk())
+                .andExpect(header().doesNotExist("Location"))
+                .andExpect(jsonPath("$.status").value("PENDING"));
     }
 
     @Test

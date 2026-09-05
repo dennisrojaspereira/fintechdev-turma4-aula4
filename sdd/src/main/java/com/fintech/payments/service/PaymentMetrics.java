@@ -17,9 +17,17 @@ public class PaymentMetrics {
         this.registry = registry;
     }
 
+    /** A new payment was persisted as PENDING and its PaymentRequested enqueued (SPEC-003). */
+    public void accepted() {
+        Counter.builder("payments.accepted")
+                .description("Payments accepted (202) with a PaymentRequested intent enqueued")
+                .register(registry)
+                .increment();
+    }
+
     public void outcome(PaymentStatus status, PaymentProvider provider) {
         Counter.builder("payments.outcome")
-                .description("Payments by final status of the initiation request")
+                .description("Payments by status recorded by the worker")
                 .tag("status", status.name())
                 .tag("provider", provider.name())
                 .register(registry)
@@ -28,7 +36,7 @@ public class PaymentMetrics {
 
     public void replayed() {
         Counter.builder("payments.idempotency.replayed")
-                .description("Requests answered from an existing payment (no provider call)")
+                .description("Requests answered from an existing payment (no new intent)")
                 .register(registry)
                 .increment();
     }
@@ -46,6 +54,23 @@ public class PaymentMetrics {
                 .tag("provider", provider.name())
                 .tag("kind", kind.name())
                 .tag("attempts", String.valueOf(attempts))
+                .register(registry)
+                .increment();
+    }
+
+    /** A redundant delivery (same eventId, or payment already resolved) that called no provider. */
+    public void workerDuplicate(String eventType) {
+        Counter.builder("payments.worker.duplicate")
+                .description("Worker deliveries recognised as redundant (no provider call)")
+                .tag("eventType", eventType)
+                .register(registry)
+                .increment();
+    }
+
+    /** A PROCESSING older than the processing timeout was turned into UNKNOWN (ADR-005 D10). */
+    public void inFlightUnknown() {
+        Counter.builder("payments.worker.inflight_unknown")
+                .description("Payments left PROCESSING by a dead worker and marked UNKNOWN")
                 .register(registry)
                 .increment();
     }

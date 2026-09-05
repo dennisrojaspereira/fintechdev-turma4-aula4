@@ -64,8 +64,65 @@ class PaymentTest {
         assertThat(payment.getFailureReason()).isNull();
     }
 
+    // ------------------------------------------------------------ SPEC-003: claim
+
     @Test
-    @DisplayName("only a PENDING payment can become UNKNOWN")
+    @DisplayName("a claim moves PENDING to PROCESSING, which is not terminal and is reconcilable")
+    void claimMovesToProcessing() {
+        Instant later = NOW.plusSeconds(5);
+        payment.claim(later);
+
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.PROCESSING);
+        assertThat(payment.getStatus().isTerminal()).isFalse();
+        assertThat(payment.getStatus().isSettled()).isFalse();
+        assertThat(payment.getStatus().needsReconciliation()).isTrue();
+        assertThat(payment.getUpdatedAt()).isEqualTo(later);
+    }
+
+    @Test
+    @DisplayName("only a PENDING payment can be claimed: never a claimed or resolved one")
+    void onlyPendingCanBeClaimed() {
+        payment.claim(NOW);
+        assertThatThrownBy(() -> payment.claim(NOW))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("cannot be claimed from PROCESSING");
+
+        Payment approved = Payment.pending("idem-2", "fp", "corr-2", "merchant-1", "customer-1",
+                new BigDecimal("10.00"), "BRL", PaymentMethod.PIX, NOW);
+        approved.approve("psp-tx-1", "AUTH", NOW);
+        assertThatThrownBy(() -> approved.claim(NOW))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("cannot be claimed from APPROVED");
+
+        Payment unknown = Payment.pending("idem-3", "fp", "corr-3", "merchant-1", "customer-1",
+                new BigDecimal("10.00"), "BRL", PaymentMethod.PIX, NOW);
+        unknown.markUnknown("lost", NOW);
+        assertThatThrownBy(() -> unknown.claim(NOW)).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    @DisplayName("a claimed payment can be settled, failed or become UNKNOWN (dead worker)")
+    void processingResolvesToAnyOutcome() {
+        payment.claim(NOW);
+        payment.approve("psp-tx-1", "AUTH", NOW);
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.APPROVED);
+
+        Payment failed = Payment.pending("idem-2", "fp", "corr-2", "merchant-1", "customer-1",
+                new BigDecimal("10.00"), "BRL", PaymentMethod.PIX, NOW);
+        failed.claim(NOW);
+        failed.fail("400", NOW);
+        assertThat(failed.getStatus()).isEqualTo(PaymentStatus.FAILED);
+
+        Payment interrupted = Payment.pending("idem-3", "fp", "corr-3", "merchant-1", "customer-1",
+                new BigDecimal("10.00"), "BRL", PaymentMethod.PIX, NOW);
+        interrupted.claim(NOW);
+        interrupted.markUnknown("worker interrupted", NOW);
+        assertThat(interrupted.getStatus()).isEqualTo(PaymentStatus.UNKNOWN);
+        assertThat(interrupted.getStatus()).isNotEqualTo(PaymentStatus.FAILED);
+    }
+
+    @Test
+    @DisplayName("only a PENDING or PROCESSING payment can become UNKNOWN")
     void onlyPendingBecomesUnknown() {
         payment.approve("psp-tx-1", "AUTH", NOW);
 

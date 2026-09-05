@@ -8,6 +8,7 @@ import org.apache.kafka.common.header.internals.RecordHeader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.Limit;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -20,7 +21,11 @@ import java.time.Clock;
 import java.util.List;
 
 /**
- * Drains the outbox table into Kafka.
+ * Drains the outbox table into Kafka: the SPEC-001 publisher, kept as an operational
+ * contingency. Since SPEC-003 (ADR-005 D8) the default publisher is Debezium CDC, which reads the
+ * same table from the database log; this bean only exists when
+ * {@code payments.outbox.publisher=poller}. The two must never run together (every row would be
+ * delivered twice; consumers would survive it, but it is pointless).
  *
  * <p>Each poll runs in its own transaction and locks its batch with {@code FOR UPDATE SKIP LOCKED},
  * so multiple application instances can run this concurrently. A row is only marked published
@@ -32,6 +37,8 @@ import java.util.List;
  * consumers recognise it.
  */
 @Component
+@ConditionalOnProperty(name = PaymentsProperties.Outbox.PUBLISHER_PROPERTY,
+                       havingValue = PaymentsProperties.Outbox.POLLER)
 public class OutboxPublisher {
 
     private static final Logger log = LoggerFactory.getLogger(OutboxPublisher.class);

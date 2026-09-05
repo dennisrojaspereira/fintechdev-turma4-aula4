@@ -1,6 +1,8 @@
 # SPEC-001 — Iniciar Pagamento
 
 Status: Implemented — decisões D1–D3 aprovadas em 2026-09-05 (ADR-001..003 Aceitas)
+Nota: a SPEC-003 (2026-09-05) alterou o contrato HTTP (novo pagamento → 202 PENDING) e a publicação
+da outbox (Debezium CDC em vez do poller). Os acceptance criteria abaixo continuam valendo e testados.
 
 ## Fonte da verdade
 Esta SPEC define o comportamento esperado.

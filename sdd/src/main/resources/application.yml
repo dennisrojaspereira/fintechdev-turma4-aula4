@@ -56,9 +56,17 @@ spring:
 payments:
   topics:
     payment-completed: ${KAFKA_TOPIC_PAYMENT_COMPLETED:payments.payment-completed.v1}
+    payment-requested: ${KAFKA_TOPIC_PAYMENT_REQUESTED:payments.payment-requested.v1}
   consumer:
     group-id: ${KAFKA_CONSUMER_GROUP:payments-ledger}
+  worker:
+    group-id: ${KAFKA_WORKER_GROUP:payments-worker}
+    # ADR-005 D10: a PROCESSING older than this had its worker die mid-call; on redelivery it
+    # becomes UNKNOWN (never charged again). Above the worst-case budget of any provider (~5.6s).
+    processing-timeout: ${WORKER_PROCESSING_TIMEOUT:30s}
   outbox:
+    # cdc: Debezium ships the outbox from the WAL (ADR-005 D8). poller: SPEC-001 in-app poller.
+    publisher: ${OUTBOX_PUBLISHER:cdc}
     batch-size: 100
     max-attempts: 10
     poll-interval-ms: 500

@@ -23,40 +23,48 @@ Valide invariantes de negócio, não apenas status HTTP.
 
 ## Como este harness está implementado
 
-`mvn verify` sobe PostgreSQL 16 e Kafka (Testcontainers) e **dois** provedores falsos (WireMock:
-PSP de cartões e provedor PIX, em portas distintas) e executa
-`src/test/java/com/fintech/payments/integration/PaymentFlowIT.java`.
+`mvn verify` sobe, via Testcontainers numa rede compartilhada: PostgreSQL 16 com
+`wal_level=logical`, Kafka (com listener interno `kafka:19092`), **Debezium Kafka Connect**
+(`debezium/connect:2.7.3.Final`, conector `payments-outbox` registrado depois do Flyway) e
+**dois** provedores falsos (WireMock: PSP de cartões e provedor PIX), e executa
+`src/test/java/com/fintech/payments/integration/PaymentFlowIT.java`. O poller da SPEC-001 fica
+desligado (`payments.outbox.publisher=cdc`); `payments.worker.processing-timeout` é 3 s no
+harness (30 s em produção) para os experimentos de worker morto terminarem em segundos.
 
-### SPEC-001 — Iniciar Pagamento (cartões)
-
-| Experimento | Teste executável | Invariante verificada |
-|---|---|---|
-| 1. PSP success | `PaymentFlowIT.approvedPaymentIsStoredPublishedAndCredited` | 201, linha APPROVED, 1 evento com `eventId` = outbox id, 1 crédito no ledger, **0 chamadas ao provedor PIX** |
-| 2. Connection timeout | `HttpPspClientTest.retriesConnectTimeoutUpToThreeTimes`, `connectTimeoutThenSuccess`, `capsAttemptsAtThree`; `ProviderRetryPolicyTest` | retry só aqui, máx. 3, backoff, mesma chave |
-| 3. PSP processa, resposta perdida | `PaymentFlowIT.lostPspAnswerIsUnknownAndReplaySafe`, `HttpPspClientTest.doesNotRetryReadTimeout` | 202 UNKNOWN, **1** chamada ao PSP, sem evento, replay não cobra |
-| 4. Request duplicada | `PaymentFlowIT.duplicateRequestDoesNotChargeTwice`, `concurrentDuplicatesChargeOnce`, `sameKeyDifferentBodyIsRejected` | 1 chamada ao PSP, 1 evento, id estável, 422 para corpo diferente |
-| 5. Evento Kafka duplicado | `PaymentFlowIT.duplicateEventHasOneEffect`, `PaymentCompletedConsumerTest` | mesmo `eventId` duas vezes → 1 crédito |
-| 6. Kafka indisponível | `PaymentFlowIT.kafkaUnavailableDoesNotLoseTheIntent`, `OutboxPublisherTest` | 201 mesmo com broker pausado; linha da outbox fica; publica ao voltar |
-| 7. Restart do publisher | `PaymentFlowIT.duplicateEventHasOneEffect` (simula reenvio da mesma linha), `OutboxPublisherTest.retriesOnNextPoll` | reentrega tem o mesmo `eventId`; consumer ignora |
-| Extra: 5xx / 4xx / redirect | `PaymentFlowIT.serverErrorIsUnknownWithoutRetry`, `rejectionIsFailed`, `redirectIsRetriedThreeTimes` | 5xx → UNKNOWN sem retry; 4xx → FAILED; 3xx → 3 tentativas |
-
-### SPEC-002 — PIX por provedor síncrono HTTP
+### SPEC-003 — Processamento assíncrono via CDC (Debezium)
 
 | Experimento | Teste executável | Invariante verificada |
 |---|---|---|
-| 1. PIX confirmado | `PaymentFlowIT.pixPaymentIsRoutedToPixProviderAndSettled` | roteado ao provedor PIX, **0 chamadas ao PSP**, `provider=PIX_PROVIDER` no banco/resposta/evento, `pspTransactionId = endToEndId`, 1 crédito |
-| 1b. PIX rejeitado pelo banco | `PaymentFlowIT.pixRejectedIsDeclinedWithoutLedgerEffect` | DECLINED com `rejectionReason`, evento publicado, 0 crédito |
-| 2. Connection timeout no PIX | `HttpPixClientTest.retriesConnectTimeoutUpToThreeTimes`, `retriesRedirectsUpToThreeTimes`; `ProviderRetryPolicyTest` | mesma política: só connect timeout / redirect, máx. 3, mesma chave |
-| 3. Provedor PIX liquida, resposta perdida | `PaymentFlowIT.pixLostAnswerIsUnknownAndReplaySafe`, `HttpPixClientTest.doesNotRetryReadTimeout` | 202 UNKNOWN (não FAILED), **1** chamada, sem fallback ao PSP, sem evento, replay não paga de novo |
-| 4. Request duplicada com outro meio | `PaymentServiceTest.sameKeyDifferentMethodIsConflict` | mesma chave com PIX em vez de cartão → 422, nenhum provedor chamado |
-| Extra: 4xx / 5xx / status desconhecido | `PaymentFlowIT.pixRejectionIsFailed`, `HttpPixClientTest.doesNotRetryServerErrors`, `unexpectedStatusIsUnknown` | 4xx → FAILED; 5xx → UNKNOWN; `status=PENDING` → UNKNOWN, nunca APPROVED |
+| 1. Sucesso (cartão) | `PaymentFlowIT.approvedCardPaymentIsAcceptedThenProcessedAsynchronously` | **202 PENDING** + Location sem chamar provedor; linha `PaymentRequested` na outbox na mesma tx; Debezium publica com `key = paymentId`, headers `eventId` = id da outbox, `eventType`, `correlationId`, `value` = payload byte a byte; worker cobra **1×** com `Idempotency-Key`/`X-Correlation-Id`; APPROVED; `PaymentCompleted`; 1 crédito; `published_at` nulo (CDC não escreve no banco) |
+| 1. Sucesso (PIX) | `pixPaymentIsRoutedToPixProviderAndSettled`, `pixRejectedIsDeclinedWithoutLedgerEffect` | 202 → APPROVED/DECLINED via provedor PIX, **0** chamadas ao PSP |
+| 3. Resposta perdida (no worker) | `lostProviderAnswerIsUnknownAndReplaySafe`, `pixLostAnswerIsUnknownAndReplaySafe` | UNKNOWN (não FAILED), **1** chamada, sem `PaymentCompleted`, replay da chave → 200 UNKNOWN sem novo intent |
+| 4. Request duplicada | `duplicateRequestDoesNotChargeTwice`, `concurrentDuplicatesChargeOnce`, `sameKeyDifferentBodyIsRejected` | 1 × 202 e N × 200 com o mesmo id; **1** linha `PaymentRequested` (UNIQUE); 1 cobrança; 1 evento; 422 para corpo diferente |
+| 5. Evento duplicado (worker) | `redeliveredPaymentRequestedChargesOnce`; `PaymentProcessorTest.duplicateDeliveryDoesNothing` | o mesmo `PaymentRequested` entregue 3× → 1 cobrança, 1 `PaymentCompleted`, 1 crédito |
+| 5b. Evento tardio (snapshot/restart) | `lateEventForResolvedPaymentDoesNotCallProvider`; `PaymentProcessorTest.lateEventForResolvedPaymentIsRecordedOnly` | `PaymentRequested` com `eventId` novo para pagamento já resolvido → inbox gravado, **0** chamadas |
+| 5c. Evento duplicado (ledger) | `duplicateCompletedEventHasOneEffect`, `PaymentCompletedConsumerTest` | inalterado: mesmo `eventId` 2× → 1 crédito |
+| 6. Kafka indisponível | `kafkaUnavailableDoesNotLoseTheIntent` | broker pausado: 202, linha na outbox, PENDING; ao voltar, publicado **1×**, cobrado 1×, creditado 1× |
+| 6b. Debezium indisponível | `debeziumUnavailableDoesNotLoseTheIntent` | conector pausado: 202, nada no tópico, PENDING; ao voltar, publicado **1×** |
+| 7. Worker morre após o claim | `deadWorkerLeavesUnknownWithoutSecondCharge`; `PaymentProcessorTest.staleProcessingBecomesUnknownWithoutCharging` | `PROCESSING` mais antigo que o timeout → UNKNOWN (não FAILED), inbox gravado, **0** chamadas ao provedor, sem evento |
+| 7b. Worker concorrente em voo | `recentProcessingIsRetriedThenTimesOut`; `PaymentProcessorTest.recentProcessingIsRetried` | `PROCESSING` recente → reentrega com backoff sem chamar provedor; após o timeout → UNKNOWN |
+| Extra: 5xx / 4xx / redirect no worker | `serverErrorIsUnknownWithoutRetry`, `rejectionIsFailed`, `redirectIsRetriedThreeTimes` | 5xx → UNKNOWN sem retry; 4xx → FAILED sem evento; 3xx → 3 tentativas |
+| Contrato HTTP (D7) | `PaymentControllerTest.acceptedWhenPending`, `okWhenReplayed` | 202 PENDING + Location; 200 replay em qualquer estado; 201 só para terminal |
+
+### SPEC-001 / SPEC-002 (mantidos, agora no fluxo assíncrono)
+
+| Experimento | Teste executável | Invariante verificada |
+|---|---|---|
+| 2. Connection timeout | `HttpPspClientTest`, `HttpPixClientTest`, `ProviderRetryPolicyTest` | retry só aqui e em redirect, máx. 3, backoff, mesma chave |
 | Isolamento entre provedores | `PaymentFlowIT.pixOutageDoesNotAffectCardPayments` | PIX 503 → UNKNOWN; cartão no mesmo instante → APPROVED e creditado |
-| Roteamento exaustivo | `PaymentMethodTest`, `ProviderRouterTest` | todo meio tem provedor; falta/duplicidade de cliente derruba a inicialização |
+| Roteamento exaustivo | `PaymentMethodTest`, `ProviderRouterTest`, `PaymentProcessorTest.routesPixToPixProvider` | todo meio tem provedor; falta/duplicidade de cliente derruba a inicialização |
+| Validação / GET | `PaymentFlowIT.invalidRequestNeverReachesTheProvider`, `paymentCanBeFetched` | 400 sem linha nem intent; GET acompanha PENDING → APPROVED; 404 |
+| Poller como contingência | `OutboxPublisherTest` | inalterado; o bean só existe com `payments.outbox.publisher=poller` |
 
 ## Demo manual (docker compose)
 
 ```bash
-docker compose up -d --build          # API :8090, PSP falso :8082, provedor PIX falso :8083
+docker compose up -d --build   # API :8090, Connect :8084, PSP falso :8082, PIX falso :8083, Postgres :5433, Kafka :29093
+docker compose logs -f connect-init   # registra o conector Debezium depois do Flyway; termina em "task RUNNING"
+curl -s http://localhost:8084/connectors/payments-outbox/status
 ```
 
 `customerId` mágicos (valem nos dois provedores falsos): `customer-declined` (DECLINED),
@@ -64,36 +72,46 @@ docker compose up -d --build          # API :8090, PSP falso :8082, provedor PIX
 `customer-rejected` (400 → FAILED). Qualquer outro é APPROVED.
 
 ```bash
-# SPEC-002: PIX confirmado → 201 APPROVED, provider=PIX_PROVIDER, pspTransactionId = endToEndId
+# SPEC-003: POST → 202 PENDING imediato; GET acompanha
 curl -i -X POST http://localhost:8090/api/v1/payments \
   -H 'Content-Type: application/json' -H 'Idempotency-Key: demo-pix-1' -H 'X-Correlation-Id: demo-pix' \
   -d '{"merchantId":"acme","customerId":"c1","amount":25.00,"currency":"BRL","paymentMethod":"PIX"}'
+curl -s http://localhost:8090/api/v1/payments/<id>          # PENDING → PROCESSING → APPROVED em ~1s
+
+# Ver o que o Debezium publicou (headers eventId/eventType/correlationId)
+docker exec sdd-kafka kafka-console-consumer --bootstrap-server localhost:9092 \
+  --topic payments.payment-requested.v1 --from-beginning --timeout-ms 8000 --property print.headers=true --property print.key=true
 
 # Ver qual provedor recebeu o quê (WireMock request journal)
 curl -s http://localhost:8083/__admin/requests | head -c 600     # provedor PIX
 curl -s http://localhost:8082/__admin/requests | head -c 600     # PSP de cartões
 
-# Experimento 3 (PIX): resposta perdida → 202 UNKNOWN; repetir a mesma chave → 200 UNKNOWN, sem novo PIX
+# Experimento 3: resposta perdida → 202 PENDING, depois UNKNOWN; repetir a mesma chave → 200 UNKNOWN, sem novo provedor
 curl -i -X POST http://localhost:8090/api/v1/payments \
-  -H 'Content-Type: application/json' -H 'Idempotency-Key: demo-pix-lost-1' \
-  -d '{"merchantId":"acme","customerId":"customer-timeout","amount":10.00,"currency":"BRL","paymentMethod":"PIX"}'
-
-# Experimento 3 (cartão): igual, via PSP
-curl -i -X POST http://localhost:8090/api/v1/payments \
-  -H 'Content-Type: application/json' -H 'Idempotency-Key: demo-lost-1' -H 'X-Correlation-Id: demo-3' \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: demo-lost-1' \
   -d '{"merchantId":"acme","customerId":"customer-timeout","amount":10.00,"currency":"BRL","paymentMethod":"CREDIT_CARD"}'
 
-# Experimento 6: pausar o Kafka, pagar, ver a linha da outbox esperando, despausar
-docker pause sdd-kafka
+# Experimento 6: pausar o Kafka (ou o Debezium), pagar, ver a linha da outbox esperando, despausar
+docker pause sdd-kafka          # ou: docker pause sdd-connect
 curl -s -X POST http://localhost:8090/api/v1/payments -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: demo-kafka-1' -d '{"merchantId":"acme","customerId":"c1","amount":5,"currency":"BRL","paymentMethod":"PIX"}'
-docker exec sdd-postgres psql -U payments -c "select id, attempts, published_at, last_error from outbox_messages;"
-docker unpause sdd-kafka
+docker exec sdd-postgres psql -U payments -c "select id, event_type, topic, published_at from outbox_messages order by created_at desc limit 5;"
+docker unpause sdd-kafka        # ou: docker unpause sdd-connect
 
-# Ver eventos (campo provider incluído)
+# Experimento 7: worker morto após o claim → simular com um PROCESSING antigo e reentregar o evento
+docker exec sdd-postgres psql -U payments -c "update payments set status='PROCESSING', updated_at=now()-interval '1 minute' where id='<id>' and status='PENDING';"
+# ... reenviar o payload da outbox no tópico payments.payment-requested.v1 (kafka-console-producer) → UNKNOWN, 0 chamadas
+
+# Ver eventos PaymentCompleted (contrato inalterado)
 docker exec sdd-kafka kafka-console-consumer --bootstrap-server localhost:9092 \
   --topic payments.payment-completed.v1 --from-beginning --timeout-ms 8000 --property print.headers=true
 
-# Métricas por provedor
+# Métricas
+curl -s 'http://localhost:8090/actuator/metrics/payments.accepted'
 curl -s 'http://localhost:8090/actuator/metrics/payments.outcome?tag=provider:PIX_PROVIDER'
+curl -s 'http://localhost:8090/actuator/metrics/payments.worker.duplicate'
+curl -s 'http://localhost:8090/actuator/metrics/payments.worker.inflight_unknown'
+
+# Contingência: voltar ao poller da SPEC-001 (nunca junto com o conector registrado)
+# OUTBOX_PUBLISHER=poller docker compose up -d payments-api   +   curl -X DELETE localhost:8084/connectors/payments-outbox
 ```

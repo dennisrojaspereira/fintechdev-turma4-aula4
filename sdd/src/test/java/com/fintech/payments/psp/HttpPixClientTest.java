@@ -34,6 +34,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.options;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 
 /**
  * The PIX provider contract (ADR-004, D5) over the real HTTP stack, and proof that the shared
@@ -210,7 +211,10 @@ class HttpPixClientTest {
                     assertThat(unknown.attempts()).isEqualTo(1);
                 });
 
-        pix.verify(1, postRequestedFor(urlEqualTo(PATH)));
+        // WireMock journals the request only after the delayed response is served (1500ms),
+        // while the client gave up at 200ms: wait for the journal, then assert exactly one.
+        await().atMost(Duration.ofSeconds(3)).untilAsserted(() ->
+                pix.verify(1, postRequestedFor(urlEqualTo(PATH))));
     }
 
     @Test

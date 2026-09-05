@@ -33,6 +33,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.options;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 
 /** Exercises the real HTTP stack of the PSP client, and its retry policy, against a stubbed PSP. */
 class HttpPspClientTest {
@@ -147,7 +148,10 @@ class HttpPspClientTest {
                     assertThat(unknown.attempts()).isEqualTo(1);
                 });
 
-        psp.verify(1, postRequestedFor(urlEqualTo("/v1/charges")));
+        // WireMock journals the request only after the delayed response is served (1500ms),
+        // while the client gave up at 200ms: wait for the journal, then assert exactly one.
+        await().atMost(Duration.ofSeconds(3)).untilAsserted(() ->
+                psp.verify(1, postRequestedFor(urlEqualTo("/v1/charges"))));
     }
 
     @Test
@@ -167,7 +171,10 @@ class HttpPspClientTest {
                     assertThat(unknown.attempts()).isEqualTo(1);
                 });
 
-        psp.verify(1, postRequestedFor(urlEqualTo("/v1/charges")));
+        // WireMock journals the request only after the delayed response is served (1500ms),
+        // while the client gave up at 200ms: wait for the journal, then assert exactly one.
+        await().atMost(Duration.ofSeconds(3)).untilAsserted(() ->
+                psp.verify(1, postRequestedFor(urlEqualTo("/v1/charges"))));
     }
 
     @Test
@@ -180,7 +187,10 @@ class HttpPspClientTest {
                 .isInstanceOf(PspRejectedException.class)
                 .hasMessageContaining("invalid currency");
 
-        psp.verify(1, postRequestedFor(urlEqualTo("/v1/charges")));
+        // WireMock journals the request only after the delayed response is served (1500ms),
+        // while the client gave up at 200ms: wait for the journal, then assert exactly one.
+        await().atMost(Duration.ofSeconds(3)).untilAsserted(() ->
+                psp.verify(1, postRequestedFor(urlEqualTo("/v1/charges"))));
     }
 
     @Test
@@ -192,7 +202,10 @@ class HttpPspClientTest {
         assertThatThrownBy(() -> client.charge(request))
                 .isInstanceOf(PspRejectedException.class);
 
-        psp.verify(1, postRequestedFor(urlEqualTo("/v1/charges")));
+        // WireMock journals the request only after the delayed response is served (1500ms),
+        // while the client gave up at 200ms: wait for the journal, then assert exactly one.
+        await().atMost(Duration.ofSeconds(3)).untilAsserted(() ->
+                psp.verify(1, postRequestedFor(urlEqualTo("/v1/charges"))));
     }
 
     @Test

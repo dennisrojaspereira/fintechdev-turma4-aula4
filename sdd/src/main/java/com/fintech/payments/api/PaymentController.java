@@ -3,7 +3,6 @@ package com.fintech.payments.api;
 import com.fintech.payments.api.dto.CreatePaymentRequest;
 import com.fintech.payments.api.dto.PaymentResponse;
 import com.fintech.payments.domain.Payment;
-import com.fintech.payments.domain.PaymentStatus;
 import com.fintech.payments.service.PaymentCommand;
 import com.fintech.payments.service.PaymentResult;
 import com.fintech.payments.service.PaymentService;
@@ -27,15 +26,17 @@ import java.net.URI;
 import java.util.UUID;
 
 /**
- * Public HTTP contract of SPEC-001 (see ADR-002).
+ * Public HTTP contract of SPEC-001 (ADR-002), made asynchronous by SPEC-003 (ADR-005 D7).
  *
  * <p>{@code POST /api/v1/payments} with a mandatory {@code Idempotency-Key} header:
  * <ul>
- *   <li>201 Created: a new payment reached APPROVED, DECLINED or FAILED (see {@code status}).</li>
- *   <li>202 Accepted: a new payment is UNKNOWN; the PSP outcome is unresolved. The client must
- *       NOT retry with a new key; it should poll {@code GET} or replay the same key.</li>
+ *   <li>202 Accepted + Location: a new payment was recorded ({@code status: PENDING}) and will
+ *       be processed by the worker; poll {@code GET} for the outcome. Also used for any other
+ *       non-terminal state (UNKNOWN). The client must NOT retry with a new key.</li>
+ *   <li>201 Created + Location: a new payment that is already terminal. Does not occur in the
+ *       asynchronous flow; kept so the mapping stays total.</li>
  *   <li>200 OK: the key was already used with the same body; the existing payment is returned
- *       as is, and nothing was charged again.</li>
+ *       as is, whatever its state, and nothing was charged again.</li>
  *   <li>422: the key was already used with a different body.</li>
  *   <li>400: validation failure or missing header.</li>
  * </ul>
@@ -77,9 +78,9 @@ public class PaymentController {
         URI location = uriBuilder.path("/api/v1/payments/{id}")
                 .buildAndExpand(payment.getId())
                 .toUri();
-        HttpStatus status = payment.getStatus() == PaymentStatus.UNKNOWN
-                ? HttpStatus.ACCEPTED
-                : HttpStatus.CREATED;
+        HttpStatus status = payment.getStatus().isTerminal()
+                ? HttpStatus.CREATED
+                : HttpStatus.ACCEPTED;
         return ResponseEntity.status(status).location(location).body(body);
     }
 

@@ -1,6 +1,6 @@
 # SPEC-002 — Pagar com PIX por um provedor síncrono HTTP
 
-Status: Implemented under stated assumptions — decisões D4–D6 (ADR-004) pendentes de aprovação humana
+Status: Implemented — decisões D4–D6 aprovadas em 2026-09-05 (ADR-004 Aceita)
 
 ## Fonte da verdade
 Esta SPEC estende a SPEC-001. Tudo que a SPEC-001 define continua valendo; aqui só entra o que

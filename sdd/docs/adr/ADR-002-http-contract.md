@@ -1,6 +1,8 @@
 # ADR-002 — Contrato HTTP público de Iniciar Pagamento
 
 Status: Aceito (decisão assumida pela implementação em 2026-09-03; aprovada pelo dono do produto em 2026-09-05)
+Nota (2026-09-05): superseded em parte pela ADR-005 — com o processamento assíncrono (SPEC-003), um
+pagamento novo responde 202 Accepted com `status: PENDING`; 200/422/400/404 e a semântica de UNKNOWN permanecem.
 Data: 2026-09-03
 Resolve: SPEC-001 Open Question "Definir contrato HTTP público"
 

@@ -1,6 +1,6 @@
 # ADR-004 — Roteamento por meio de pagamento e provedor PIX síncrono HTTP
 
-Status: Proposto (decisão assumida pela implementação; pendente de aprovação humana)
+Status: Aceito (decisão assumida pela implementação em 2026-09-05; aprovada pelo dono do produto em 2026-09-05)
 Data: 2026-09-05
 Resolve: SPEC-002 Open Questions "Como o provedor é escolhido?", "Qual o contrato HTTP do
 provedor PIX?" e "Qual o timeout budget do provedor PIX?"

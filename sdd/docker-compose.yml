@@ -3,6 +3,8 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: sdd-postgres
+    # SPEC-003 (ADR-005 D8): Debezium reads the outbox from the WAL, which needs logical decoding.
+    command: ["postgres", "-c", "wal_level=logical"]
     environment:
       POSTGRES_DB: payments
       POSTGRES_USER: payments
@@ -46,6 +48,51 @@ services:
       timeout: 10s
       retries: 12
 
+  # Debezium Kafka Connect: captures outbox_messages from the PostgreSQL WAL and routes each
+  # row to the topic named in the row (Outbox Event Router). REST on host port 8084.
+  connect:
+    image: debezium/connect:2.7.3.Final
+    container_name: sdd-connect
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8084:8083"
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: payments-connect
+      CONFIG_STORAGE_TOPIC: connect.configs
+      OFFSET_STORAGE_TOPIC: connect.offsets
+      STATUS_STORAGE_TOPIC: connect.status
+      CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      STATUS_STORAGE_REPLICATION_FACTOR: 1
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8083/connectors >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+
+  # Registers docker/debezium/payments-outbox-connector.json after the API applied Flyway
+  # (the outbox table must exist before the connector snapshots it). Exits 0 when RUNNING.
+  connect-init:
+    image: debezium/connect:2.7.3.Final
+    container_name: sdd-connect-init
+    depends_on:
+      connect:
+        condition: service_healthy
+      payments-api:
+        condition: service_started
+    volumes:
+      - ./docker/debezium:/debezium:ro
+    entrypoint: ["bash", "/debezium/register-connector.sh"]
+    environment:
+      CONNECT_URL: http://connect:8083
+      API_HEALTH_URL: http://payments-api:8080/actuator/health/readiness
+    restart: "no"
+
   mock-psp:
     image: wiremock/wiremock:3.9.2
     container_name: sdd-mock-psp
@@ -86,6 +133,9 @@ services:
       DB_PASSWORD: payments
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       KAFKA_TOPIC_PAYMENT_COMPLETED: payments.payment-completed.v1
+      KAFKA_TOPIC_PAYMENT_REQUESTED: payments.payment-requested.v1
+      # cdc (default): Debezium publishes the outbox. poller: SPEC-001 in-app poller (contingency).
+      OUTBOX_PUBLISHER: cdc
       PSP_BASE_URL: http://mock-psp:8080
       PSP_API_KEY: local-dev-key
       PIX_BASE_URL: http://mock-pix:8080

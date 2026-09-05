@@ -17,9 +17,13 @@ import java.util.UUID;
  *
  * <p>State transitions:
  * <pre>
- *   PENDING ──► APPROVED | DECLINED | FAILED | UNKNOWN
+ *   PENDING ──► PROCESSING ──► APPROVED | DECLINED | FAILED | UNKNOWN
+ *   PENDING ──► UNKNOWN   (reserved; the worker always claims first)
  *   UNKNOWN ──► APPROVED | DECLINED | FAILED   (reconciliation, out of scope)
  * </pre>
+ * {@code PROCESSING} (SPEC-003) means a worker claimed the payment and the provider call is in
+ * flight. The claim itself is done with a conditional UPDATE in {@link PaymentRepository#claim}
+ * so that only one worker wins; {@link #claim} is the same transition on the entity.
  */
 @Entity
 @Table(name = "payments")
@@ -112,6 +116,21 @@ public class Payment {
                 merchantId, customerId, amount, currency, paymentMethod, now);
     }
 
+    /**
+     * A worker takes ownership of the provider call (SPEC-003, ADR-005 D9). Only a PENDING
+     * payment can be claimed: a claimed or resolved one must never be charged again.
+     * {@code updatedAt} becomes the claim time; ADR-005 D10 measures the processing timeout
+     * from it.
+     */
+    public void claim(Instant now) {
+        if (status != PaymentStatus.PENDING) {
+            throw new IllegalStateException(
+                    "Payment " + id + " cannot be claimed from " + status);
+        }
+        this.status = PaymentStatus.PROCESSING;
+        this.updatedAt = now;
+    }
+
     public void approve(String pspTransactionId, String authorizationCode, Instant now) {
         requireUnresolved();
         this.status = PaymentStatus.APPROVED;
@@ -137,9 +156,12 @@ public class Payment {
         this.updatedAt = now;
     }
 
-    /** We never learned the outcome. The charge may exist on the PSP side. */
+    /**
+     * We never learned the outcome: the provider did not answer, or the worker that called it
+     * died before recording the answer. The charge may exist on the provider side.
+     */
     public void markUnknown(String reason, Instant now) {
-        if (status != PaymentStatus.PENDING) {
+        if (status != PaymentStatus.PENDING && status != PaymentStatus.PROCESSING) {
             throw new IllegalStateException(
                     "Payment " + id + " cannot become UNKNOWN from " + status);
         }

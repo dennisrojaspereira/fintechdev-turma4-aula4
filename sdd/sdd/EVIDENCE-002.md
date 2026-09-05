@@ -57,7 +57,7 @@ que é a evidência de que o comportamento da SPEC-001 não mudou.
 
 ## Riscos restantes
 
-1. **D4–D6 assumidas** (ADR-004), pendentes de aprovação: roteamento fixo, contrato do provedor
+1. **D4–D6 assumidas** (ADR-004), aprovadas em 2026-09-05: roteamento fixo, contrato do provedor
    PIX (síncrono, `CONFIRMED|REJECTED`) e budget de 5s de read timeout.
 2. **PIX real é assíncrono** (cobrança + webhook / consulta). O contrato síncrono é uma premissa
    do Intent; um provedor que responda `PENDING` cai em `MALFORMED_RESPONSE → UNKNOWN`
