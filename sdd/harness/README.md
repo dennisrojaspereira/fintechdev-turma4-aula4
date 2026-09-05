@@ -59,6 +59,18 @@ harness (30 s em produção) para os experimentos de worker morto terminarem em 
 | Validação / GET | `PaymentFlowIT.invalidRequestNeverReachesTheProvider`, `paymentCanBeFetched` | 400 sem linha nem intent; GET acompanha PENDING → APPROVED; 404 |
 | Poller como contingência | `OutboxPublisherTest` | inalterado; o bean só existe com `payments.outbox.publisher=poller` |
 
+## Carga (k6) com página de apresentação
+
+`loadtest/` tem quatro experimentos k6 com thresholds (smoke; provedor lento vs normal;
+idempotência sob concorrência; throughput e drenagem da fila) e um runner local que os dispara de
+uma página HTML com log ao vivo e cards de resultado:
+
+```bash
+cd sdd/loadtest && java K6Runner.java      # http://localhost:7000 (stack do compose no ar)
+```
+
+Detalhes e roteiro de aula em [loadtest/README.md](../loadtest/README.md).
+
 ## Demo manual (docker compose)
 
 ```bash

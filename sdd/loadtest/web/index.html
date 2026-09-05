@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SPEC-003 ao vivo — experimentos k6</title>
+<style>
+  :root {
+    --bg: #0f1218; --panel: #171c26; --panel-2: #1e2532; --line: #2a3242;
+    --text: #e8ecf3; --muted: #9aa5b8; --accent: #5ab0ff; --ok: #3ddc97; --fail: #ff5c7a; --warn: #ffc857;
+    --mono: ui-monospace, "Cascadia Code", Consolas, "JetBrains Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { padding: 32px 40px 20px; border-bottom: 1px solid var(--line); background: linear-gradient(180deg, #131824, var(--bg)); }
+  header h1 { margin: 0 0 6px; font-size: 30px; letter-spacing: -0.01em; }
+  header p { margin: 0; color: var(--muted); max-width: 980px; }
+  .flow { margin: 18px 0 0; padding: 12px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+          font: 14px/1.6 var(--mono); color: #c7d0e0; white-space: pre; overflow-x: auto; }
+  .status-bar { display: flex; gap: 16px; align-items: center; margin-top: 14px; color: var(--muted); font-size: 14px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--warn); display: inline-block; margin-right: 6px; }
+  .dot.ok { background: var(--ok); } .dot.fail { background: var(--fail); }
+  main { padding: 24px 40px 60px; display: grid; gap: 24px; max-width: 1500px; }
+  section.card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px 24px; }
+  .card-head { display: flex; align-items: flex-start; gap: 18px; flex-wrap: wrap; }
+  .num { font: 700 28px/1 var(--mono); color: var(--accent); padding-top: 4px; min-width: 46px; }
+  .card-head h2 { margin: 0 0 4px; font-size: 22px; }
+  .story { color: var(--muted); margin: 0; max-width: 900px; }
+  .watch { margin: 10px 0 0; padding: 0 0 0 18px; color: #c7d0e0; max-width: 900px; }
+  .watch li { margin: 2px 0; }
+  .controls { margin-left: auto; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .controls label { color: var(--muted); font-size: 14px; }
+  .controls input { width: 70px; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: 14px var(--mono); }
+  button { background: var(--accent); color: #06111f; border: 0; border-radius: 8px; padding: 10px 18px; font-weight: 700; font-size: 15px; cursor: pointer; }
+  button:disabled { background: #3a4356; color: #8a94a6; cursor: not-allowed; }
+  .badge { padding: 4px 10px; border-radius: 999px; font: 600 13px var(--mono); border: 1px solid var(--line); color: var(--muted); }
+  .badge.running { color: var(--warn); border-color: var(--warn); }
+  .badge.pass { color: var(--ok); border-color: var(--ok); }
+  .badge.fail { color: var(--fail); border-color: var(--fail); }
+  .body { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 18px; margin-top: 18px; }
+  @media (max-width: 1100px) { .body { grid-template-columns: 1fr; } }
+  .log { background: #0b0e14; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; height: 340px; overflow: auto;
+         font: 13px/1.45 var(--mono); color: #b9c3d4; white-space: pre-wrap; word-break: break-word; }
+  .log .ok { color: var(--ok); } .log .fail { color: var(--fail); } .log .dim { color: #6f7a8f; }
+  .results { display: grid; gap: 12px; align-content: start; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+  .tile { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .tile .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .tile .v { font: 700 24px/1.2 var(--mono); margin-top: 4px; }
+  .tile .s { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .thresholds { display: grid; gap: 6px; }
+  .th { display: flex; gap: 10px; align-items: center; font: 13px var(--mono); padding: 6px 10px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--line); }
+  .th .mark { font-weight: 700; min-width: 18px; }
+  .th.pass .mark { color: var(--ok); } .th.fail .mark { color: var(--fail); } .th.fail { border-color: var(--fail); }
+  .checks { font-size: 13px; color: var(--muted); display: grid; gap: 4px; }
+  .checks div { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px dashed var(--line); padding: 3px 0; }
+  .checks .fails { color: var(--fail); font-weight: 700; }
+  h3 { margin: 6px 0 2px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .empty { color: #5f6a7e; font-size: 14px; }
+  footer { padding: 0 40px 40px; color: var(--muted); font-size: 13px; }
+  code { font-family: var(--mono); color: #c7d0e0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SPEC-003 ao vivo — a request não espera o provedor</h1>
+  <p>Experimentos de carga (k6) contra a stack do <code>docker compose</code>: PostgreSQL → Debezium → Kafka → worker → provedor.
+     Cada experimento prova um acceptance criterion com <em>thresholds</em>: se um falhar, o k6 sai com erro e o card fica vermelho.</p>
+  <div class="flow">POST /api/v1/payments ──► 202 PENDING ──► outbox(PaymentRequested) ═WAL═► Debezium ──► Kafka ──► worker ──► PSP / PIX ──► APPROVED | DECLINED | FAILED | UNKNOWN
+                                                                                                           └──► PaymentCompleted ──► ledger (idempotente)</div>
+  <div class="status-bar">
+    <span><span class="dot" id="runner-dot"></span><span id="runner-text">conectando ao runner…</span></span>
+    <span>API <code>localhost:8090</code> · Connect <code>:8084</code> · PSP falso <code>:8082</code> · PIX falso <code>:8083</code></span>
+  </div>
+</header>
+
+<main id="cards"></main>
+
+<footer>
+  Runner: <code>cd sdd/loadtest &amp;&amp; java K6Runner.java</code> (usa o <code>k6</code> local ou <code>grafana/k6</code> no Docker).
+  Resultados em <code>sdd/loadtest/results/*.json</code>. Um experimento por vez.
+</footer>
+
+<script>
+const SCENARIOS = [
+  {
+    script: '01-smoke.js', title: 'Caminho feliz, uma request por vez',
+    story: 'Dez pagamentos (PIX e cartão alternados), um de cada vez. O POST responde 202 PENDING sem chamar provedor; o worker reivindica, cobra uma vez e o GET mostra APPROVED.',
+    watch: ['POST em dezenas de ms, enquanto o desfecho leva centenas (é o caminho Debezium → Kafka → worker → provedor).',
+            'Cada provedor falso recebeu exatamente 5 chamadas: nada cobrado na request, nada cobrado duas vezes.'],
+    tiles: [
+      ['POST p95', 'http_req_duration{name:POST /payments}', 'p(95)', 'ms'],
+      ['Tempo até o desfecho p95', 'time_to_outcome', 'p(95)', 'ms'],
+      ['Tempo até o desfecho médio', 'time_to_outcome', 'avg', 'ms'],
+      ['Chamadas extras ao provedor', 'extra_provider_calls', 'count', ''],
+      ['Checks', 'checks', 'rate', '%'],
+    ],
+  },
+  {
+    script: '02-api-nao-espera-provedor.js', title: 'Provedor lento (10 s) versus provedor normal',
+    story: 'Metade dos pagamentos vai para um PSP que demora 10 s para responder; a outra metade, para o provedor PIX normal. A latência do POST tem de ser idêntica. O lento vira UNKNOWN (read timeout do worker), nunca FAILED, e é cobrado uma única vez.',
+    watch: ['Os dois p95 do POST ficam abaixo de 300 ms: o cliente não paga pela latência do provedor.',
+            'UNKNOWN ≠ FAILED: a cobrança pode existir no provedor; o PSP falso recebe 1 chamada por pagamento lento (sem retry de read timeout).',
+            'O worker tem concurrency 1: os pagamentos lentos entram em fila e o "tempo até o desfecho" deles cresce. Isso é a fila ficando visível.'],
+    tiles: [
+      ['POST p95 (provedor rápido)', 'http_req_duration{name:POST /payments,provider_speed:fast}', 'p(95)', 'ms'],
+      ['POST p95 (provedor lento)', 'http_req_duration{name:POST /payments,provider_speed:slow}', 'p(95)', 'ms'],
+      ['Desfecho p95 (rápido)', 'time_to_outcome{provider_speed:fast}', 'p(95)', 'ms'],
+      ['Desfecho p95 (lento → UNKNOWN)', 'time_to_outcome{provider_speed:slow}', 'p(95)', 'ms'],
+      ['Chamadas extras ao provedor', 'extra_provider_calls', 'count', ''],
+      ['Checks', 'checks', 'rate', '%'],
+    ],
+  },
+  {
+    script: '03-idempotencia.js', title: 'Idempotência sob concorrência',
+    story: '20 usuários virtuais repetem, durante 30 s, um pool de 25 Idempotency-Keys (a mesma chave chega em paralelo e repetida), e 1 em cada 6 requests reusa a chave com outro valor. Só pode existir um 202 por chave, o resto é 200 (replay) ou 422 (conflito), e os provedores recebem exatamente 25 chamadas.',
+    watch: ['accepted_new_202 == 25, replayed_200 na casa das centenas, conflict_422 dezenas.',
+            'Total de chamadas ao provedor == 25, mesmo com a corrida no INSERT (índice único) e reentregas do Kafka (inbox + claim).'],
+    tiles: [
+      ['202 (novos)', 'accepted_new_202', 'count', ''],
+      ['200 (replays)', 'replayed_200', 'count', ''],
+      ['422 (conflitos)', 'conflict_422', 'count', ''],
+      ['POST p95', 'http_req_duration{name:POST /payments}', 'p(95)', 'ms'],
+      ['Chamadas extras ao provedor', 'extra_provider_calls', 'count', ''],
+      ['Requests/s', 'http_reqs', 'rate', '/s'],
+    ],
+  },
+  {
+    script: '04-throughput.js', title: 'Throughput: a API aceita mais rápido do que o worker processa',
+    story: 'Chegada constante de N pagamentos por segundo com chaves únicas. A API precisa sustentar a taxa com p95 baixo e zero erros; no fim, medimos a fila que sobrou e quanto tempo o worker levou para drená-la. Nada se perde: todo pagamento aceito ganha um desfecho e uma única chamada ao provedor.',
+    watch: ['dropped_iterations == 0: o k6 manteve a taxa, a API nunca empurrou de volta.',
+            'backlog ao fim da carga > 0 e tempo de drenagem: o desacoplamento aparece como fila durável, não como erro para o cliente.',
+            'Pergunta para a turma: como escalar o worker? (partições = 6, concurrency do listener = 1.)'],
+    params: [['RATE', 'req/s', 10], ['DURATION', 'duração', '20s']],
+    tiles: [
+      ['Pagamentos aceitos', 'iterations', 'count', ''],
+      ['POST p95', 'http_req_duration{name:POST /payments}', 'p(95)', 'ms'],
+      ['POST p99', 'http_req_duration{name:POST /payments}', 'p(99)', 'ms'],
+      ['Erros HTTP', 'http_req_failed', 'rate', '%'],
+      ['Fila ao fim da carga', 'backlog_at_end_of_load', 'value', ''],
+      ['Drenagem da fila', 'backlog_drain_seconds', 'avg', 's'],
+      ['Chamadas extras ao provedor', 'extra_provider_calls', 'count', ''],
+    ],
+  },
+];
+
+const cards = document.getElementById('cards');
+let running = false;
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+function fmt(value, unit) {
+  if (value === undefined || value === null || Number.isNaN(value)) return '—';
+  if (unit === '%') return (value * 100).toFixed(value === 1 || value === 0 ? 0 : 2) + '%';
+  if (unit === 'ms') return value >= 10000 ? (value / 1000).toFixed(1) + ' s' : value.toFixed(value < 100 ? 1 : 0) + ' ms';
+  if (unit === 's') return value.toFixed(1) + ' s';
+  if (unit === '/s') return value.toFixed(1) + '/s';
+  return Number.isInteger(value) ? String(value) : value.toFixed(2);
+}
+
+function metricValue(metrics, name, stat) {
+  const m = metrics[name];
+  if (!m) return undefined;
+  if (stat === 'rate' && m.value !== undefined && name !== 'http_reqs') return m.value; // Rate metrics
+  return m[stat];
+}
+
+SCENARIOS.forEach((sc, i) => {
+  const card = el('section', 'card');
+  card.id = 'card-' + i;
+  const head = el('div', 'card-head');
+  head.append(el('div', 'num', String(i + 1).padStart(2, '0')));
+  const text = el('div');
+  text.append(el('h2', null, sc.title));
+  text.append(el('p', 'story', sc.story));
+  const watch = el('ul', 'watch');
+  sc.watch.forEach(w => watch.append(el('li', null, w)));
+  text.append(watch);
+  head.append(text);
+
+  const controls = el('div', 'controls');
+  const inputs = {};
+  (sc.params || []).forEach(([key, label, def]) => {
+    const l = el('label', null, label + ' ');
+    const input = el('input');
+    input.value = def;
+    inputs[key] = input;
+    l.append(input);
+    controls.append(l);
+  });
+  const badge = el('span', 'badge', 'pronto');
+  const button = el('button', null, 'Rodar');
+  controls.append(badge, button);
+  head.append(controls);
+  card.append(head);
+
+  const body = el('div', 'body');
+  const log = el('div', 'log');
+  log.append(el('span', 'dim', 'Saída do k6 aparece aqui.'));
+  const results = el('div', 'results');
+  results.append(el('div', 'empty', 'Sem resultados ainda.'));
+  body.append(log, results);
+  card.append(body);
+  cards.append(card);
+
+  const ui = { badge, button, log, results, inputs };
+  button.addEventListener('click', () => start(sc, ui));
+  // Show the last recorded run (if any) so the page tells the story even before re-running.
+  fetch('/latest?script=' + encodeURIComponent(sc.script)).then(r => r.ok ? r.json() : null).then(d => {
+    if (!d || running) return;
+    render(sc, ui, d.summary);
+    badge.textContent = 'último: ' + d.file.replace(sc.script.replace('.js', '') + '-', '').replace('.json', '');
+  }).catch(() => {});
+});
+
+function start(sc, ui) {
+  if (running) return;
+  running = true;
+  document.querySelectorAll('button').forEach(b => b.disabled = true);
+  ui.badge.textContent = 'rodando…';
+  ui.badge.className = 'badge running';
+  ui.log.textContent = '';
+  ui.results.textContent = '';
+  ui.results.append(el('div', 'empty', 'Aguardando o resumo do k6…'));
+
+  const params = new URLSearchParams({ script: sc.script });
+  Object.entries(ui.inputs).forEach(([k, input]) => params.set(k, input.value.trim()));
+  const es = new EventSource('/run?' + params.toString());
+
+  const append = (line, cls) => {
+    const span = el('div', cls, line);
+    ui.log.append(span);
+    ui.log.scrollTop = ui.log.scrollHeight;
+  };
+  es.addEventListener('start', e => {
+    const d = JSON.parse(e.data);
+    append('$ ' + d.command, 'dim');
+  });
+  es.addEventListener('log', e => {
+    const line = JSON.parse(e.data);
+    const cls = /✓|succeeded/.test(line) ? 'ok' : /✗|failed|ERRO|error|level=error/.test(line) ? 'fail' : null;
+    append(line, cls);
+  });
+  es.addEventListener('summary', e => render(sc, ui, JSON.parse(e.data)));
+  es.addEventListener('done', e => {
+    const d = JSON.parse(e.data);
+    const pass = d.exitCode === 0;
+    ui.badge.textContent = pass ? 'PASSOU (exit 0)' : 'FALHOU (exit ' + d.exitCode + ')';
+    ui.badge.className = 'badge ' + (pass ? 'pass' : 'fail');
+    append(pass ? '── thresholds ok, k6 exit 0' : '── k6 exit ' + d.exitCode, pass ? 'ok' : 'fail');
+    finish(es);
+  });
+  es.onerror = () => {
+    if (running) {
+      append('── conexão com o runner perdida', 'fail');
+      ui.badge.textContent = 'erro';
+      ui.badge.className = 'badge fail';
+      finish(es);
+    }
+  };
+}
+
+function finish(es) {
+  es.close();
+  running = false;
+  document.querySelectorAll('button').forEach(b => b.disabled = false);
+}
+
+function render(sc, ui, summary) {
+  const metrics = summary.metrics || {};
+  ui.results.textContent = '';
+
+  ui.results.append(el('h3', null, 'Métricas'));
+  const tiles = el('div', 'tiles');
+  sc.tiles.forEach(([label, metric, stat, unit]) => {
+    const tile = el('div', 'tile');
+    tile.append(el('div', 'k', label));
+    tile.append(el('div', 'v', fmt(metricValue(metrics, metric, stat), unit)));
+    tile.append(el('div', 's', metric + ' · ' + stat));
+    tiles.append(tile);
+  });
+  ui.results.append(tiles);
+
+  ui.results.append(el('h3', null, 'Thresholds'));
+  const list = el('div', 'thresholds');
+  let any = false;
+  Object.entries(metrics).forEach(([name, m]) => {
+    if (!m.thresholds) return;
+    Object.entries(m.thresholds).forEach(([expr, failed]) => {
+      any = true;
+      const row = el('div', 'th ' + (failed ? 'fail' : 'pass'));
+      row.append(el('span', 'mark', failed ? '✗' : '✓'));
+      row.append(el('span', null, name + '  ' + expr));
+      list.append(row);
+    });
+  });
+  if (!any) list.append(el('div', 'empty', 'nenhum threshold no resumo'));
+  ui.results.append(list);
+
+  const checks = summary.root_group && summary.root_group.checks;
+  if (checks) {
+    ui.results.append(el('h3', null, 'Checks'));
+    const box = el('div', 'checks');
+    Object.values(checks).forEach(c => {
+      const row = el('div');
+      row.append(el('span', null, c.name));
+      row.append(el('span', c.fails ? 'fails' : null, c.passes + ' ok' + (c.fails ? ' / ' + c.fails + ' falhas' : '')));
+      box.append(row);
+    });
+    ui.results.append(box);
+  }
+}
+
+fetch('/scenarios').then(r => r.json()).then(d => {
+  document.getElementById('runner-dot').className = 'dot ok';
+  document.getElementById('runner-text').textContent = 'runner conectado · modo ' + d.mode + ' · ' + d.scripts.length + ' cenários';
+}).catch(() => {
+  document.getElementById('runner-dot').className = 'dot fail';
+  document.getElementById('runner-text').textContent = 'runner fora do ar: cd sdd/loadtest && java K6Runner.java';
+});
+</script>
+</body>
+</html>
